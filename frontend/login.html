@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="login.css">
+    <title>PRED-BiPN: Bipartite Network Projection Tool</title>
+</head>
+<body>
+    <!-- Help Modal - Comprehensive Scientific Documentation -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>PRED-BiPN: Scientific Documentation</h2>
+                <span class="close-modal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="help-content">
+                    <!-- Introduction -->
+                    <div class="help-section">
+                        <h3>Purpose & Scientific Background</h3>
+                        <p>
+                            PRED-BiPN (Bipartite Network Projection Tool) is a scientific software for 
+                            network backbone extraction and analysis from bipartite networks. It was 
+                            developed in the context of studying multifactorial diseases, where the rapid 
+                            advancement of high-throughput techniques in Systems Biology has led to the 
+                            accumulation of vast amounts of data, establishing network analysis as a 
+                            crucial tool for understanding complex biological systems.
+                        </p>
+                    </div>
+
+                    <!-- Methodology & Algorithms -->
+                    <div class="help-section">
+                        <h3>Methodology & Algorithms</h3>
+                        <p>
+                            The tool integrates <strong>23 distinct backbone extraction methods</strong>, 
+                            categorized into:
+                        </p>
+                        <ul>
+                            <li><strong>Statistical Methods:</strong> BiCM, SDSM, Polya Filter, Marginal Likelihood Filter, Disparity Filter, Noise Corrected Filter</li>
+                            <li><strong>Structural Methods:</strong> MST (Maximum Spanning Tree), Edge Betweenness, High Salience Skeleton, Global Threshold Filter</li>
+                            <li><strong>Hybrid Methods:</strong> Modularity Filter, Hierarchical Backbone, Locally Adaptive Network Sparsification (LANS), Doubly Stochastic Filter</li>
+                            <li><strong>Projection & Similarity Methods:</strong> Cosine Similarity, Adamic-Adar, Jaccard, Pearson/Spearman/Kendall Correlation, Resource Allocation</li>
+                        </ul>
+                    </div>
+
+                    <!-- Data Sources -->
+                    <div class="help-section">
+                        <h3>Data Sources</h3>
+                        <p>
+                            Method development and validation were performed using data from:
+                        </p>
+                        <ul>
+                            <li><strong>NHGRI-EBI GWAS Catalog:</strong> Genome-wide association studies with statistically significant associations (p-value &lt; 5×10⁻⁸)</li>
+                            <li><strong>NCBI OMIM (Online Mendelian Inheritance in Man):</strong> Authoritative database for monogenic disorders with expert curation</li>
+                        </ul>
+                        <p>
+                            The combination of these sources ensures comprehensive coverage of both 
+                            multifactorial and monogenic diseases.
+                        </p>
+                    </div>
+
+                    <!-- Theoretical Background -->
+                    <div class="help-section">
+                        <h3>Theoretical Background</h3>
+                        <p>
+                            Bipartite networks B=(U,V,E) are characterized by:
+                        </p>
+                        <ul>
+                            <li>Two distinct node sets U (e.g., genes) and V (e.g., diseases)</li>
+                            <li>Edges connecting only nodes from different sets (E ⊆ U × V)</li>
+                            <li>Support for weighted edge representation</li>
+                        </ul>
+                        <p>
+                            One-mode projection transforms a bipartite network into a unipartite network, 
+                            where two nodes are connected if they share a common neighbor in the original network.
+                        </p>
+                    </div>
+
+                    <!-- Evaluation Metrics -->
+                    <div class="help-section">
+                        <h3>Evaluation Metrics</h3>
+                        <p>
+                            The quality of the extracted backbone is evaluated through:
+                        </p>
+                        <ul>
+                            <li><strong>Density:</strong> ω = 2|E| / |V|(|V|-1)</li>
+                            <li><strong>Clustering Coefficient:</strong> C = (3 × number of triangles) / (number of triads)</li>
+                            <li><strong>Modularity:</strong> Q = (1/2m) Σ [A_ij - (k_i k_j)/(2m)] δ(c_i,c_j)</li>
+                            <li><strong>Diameter & Average Shortest Path Length</strong></li>
+                            <li><strong>Centrality Measures:</strong> Degree, Betweenness, Eigenvector Centrality</li>
+                        </ul>
+                    </div>
+
+                    <!-- Biological Applications -->
+                    <div class="help-section">
+                        <h3>⚕️ Biological Applications</h3>
+                        <p>
+                            PRED-BiPN enables:
+                        </p>
+                        <ul>
+                            <li><strong>Community Detection:</strong> Identification of functional gene groups collaborating in common biological pathways</li>
+                            <li><strong>Comorbidity Analysis:</strong> Recognition of diseases sharing common genetic backgrounds</li>
+                            <li><strong>Biomarker Discovery:</strong> Identification of critical hub nodes connecting seemingly unrelated pathologies</li>
+                            <li><strong>Hierarchical Knowledge Organization:</strong> Construction of DAGs (Directed Acyclic Graphs) for understanding general/specific relationships</li>
+                        </ul>
+                    </div>
+
+                    <!-- Key Findings -->
+                    <div class="help-section">
+                        <h3>📌 Key Findings</h3>
+                        <p>
+                            Comparative evaluation of methods revealed that:
+                        </p>
+                        <ul>
+                            <li><strong>Modularity Filter:</strong> Preserves dense community structures - ideal for studying comorbidities</li>
+                            <li><strong>Polya Filter & MST:</strong> Produce highly sparse, tree-like skeletons - reveal hierarchical relationships</li>
+                            <li><strong>Disparity Filter:</strong> Retains locally significant connections without undervaluing low-degree nodes</li>
+                            <li><strong>SDSM:</strong> Statistically rigorous but may lead to elongated communication paths</li>
+                        </ul>
+                        <p>
+                            <strong>There is no single optimal method for all scenarios.</strong> The choice of algorithm 
+                            must be tailored to the specific biological question, whether it aims to detect distinct 
+                            functional modules or to identify the core pathways of biological information flow.
+                        </p>
+                    </div>
+
+                    <!-- Selected Bibliography -->
+                    <div class="help-section">
+                        <h3>📚 Selected Bibliography</h3>
+                        <ul class="bibliography">
+                            <li>Serrano, M. Á., Boguñá, M., & Vespignani, A. (2009). <em>Extracting the multiscale backbone of complex weighted networks</em>. PNAS, 106(16), 6483–6488.</li>
+                            <li>Dianati, N. (2016). <em>Unwinding the hairball graph: Pruning algorithms for weighted complex networks</em>. Physical Review E, 93, 012304.</li>
+                            <li>Marcaccioli, R., Livan, G. (2019). <em>A Pólya urn approach to information filtering in complex networks</em>. Nature Communications, 10(1), 745.</li>
+                            <li>Girvan, M., & Newman, M. E. J. (2002). <em>Community structure in social and biological networks</em>. PNAS, 99(12), 7821–7826.</li>
+                            <li>Rajeh, S., Savonnet, M., Leclercq, E., & Cherifi, H. (2022). <em>Modularity-based backbone extraction in weighted complex networks</em>. arXiv:2201.12905.</li>
+                            <li>Jo, W. S., Park, J., Luhur, A., Kim, B. J., & Ahn, Y. (2020). <em>Extracting hierarchical backbones from bipartite networks</em>. arXiv:2002.07239.</li>
+                        </ul>
+                    </div>
+
+                    <!-- Technical Specifications -->
+                    <div class="help-section">
+                        <h3>⚙️ Technical Specifications</h3>
+                        <ul>
+                            <li><strong>Implementation Languages:</strong> Python, JavaScript, HTML/CSS</li>
+                            <li><strong>Libraries:</strong> NetworkX, Pandas, SciPy, NumPy, Scikit-learn</li>
+                            <li><strong>Support:</strong> Parallel processing (multiprocessing) for large-scale networks</li>
+                            <li><strong>Export Formats:</strong> CSV, TSV, JSON, GraphML, GEXF</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="closeHelpBtn" class="close-help-btn">Got it</button>
+            </div>
+        </div>
+    </div>
+   
+
+    <!-- Top bar -->
+    <!-- Top bar -->
+    <div id="topBar" class="top-bar">
+        <span class="top-bar-title">
+            <img src="o.png" alt="PRED-BiPN Logo" class="logo-icon">
+            PRED-BiPN
+        </span>
+        <div class="top-buttons">
+            <button id="mainPageBtn" class="top-btn main-page-btn">Tool</button>
+            <button id="helpBtn" class="top-btn">Help</button>
+            <button id="infoBtn" class="top-btn">Info</button>
+        </div>
+        <div id="userInfoBar" class="user-info">
+            <span class="user-icon"></span>
+        </div>
+    </div>
+    <!-- Background sidebar -->
+    <div class="sidebar"></div>
+
+    <!-- Main application panel -->
+    <div id="mainPanel" class="main-panel">
+        
+        <div id="methodPanel" class="method-panel">
+            <div id="methodDropdownGroup" class="method-dropdown-group">
+                <div class="method-dropdown">
+                    <button id="projectionsBtn" class="method-dropdown-btn">
+                        Bipartite Projections
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <ul id="projectionsOptions" class="method-dropdown-list">
+                        <li>Disparity Filter</li>
+                        <li>Doubly Stochastic Filter</li>
+                        <li>Hierarchical Backbone</li>
+                        <li>High Salience Skeleton</li>
+                        <li>Locally Adaptive Network Sparsification Filter</li>
+                        <li>Marginal Likelihood Filter</li>
+                        <li>Maximum Spanning Tree Filter</li>
+                        <li>Modularity Filter</li>
+                        <li>Noise Corrected Filter</li>
+                        <li>Global Threshold Filter</li>
+                    </ul>
+                </div>
+                <div class="method-dropdown">
+                    <button id="backboneBtn" class="method-dropdown-btn">
+                        Backbone Extraction
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <ul id="backboneOptions" class="method-dropdown-list">
+                        <li>Hypergraph Projection</li>
+                        <li>Odds Ratio Weighted Projection</li>
+                        <li>Polya Filter</li>
+                        <li>Cosine Similarity Weighted Projection</li>
+                        <li>Adamic Adar Similarity Weighted Projection</li>
+                        <li>Resource Allocation Similarity Weighted Projection</li>
+                        <li>Jaccard Similarity Weighted Projection</li>
+                        <li>Kendall Correlation Weighted Projection</li>
+                        <li>Spearman Correlation Weighted Projection</li>
+                        <li>Pearson Correlation Weighted Projection</li>
+                        <li>Edge Betweenness</li>
+                        <li>Simple Weighted Projection</li>
+                        <li>One Mode Projection</li>
+                    </ul>
+                </div>
+            </div>
+
+            <button id="uploadBtn" class="panel-button">Upload file</button>
+            <button id="continueBtn" class="panel-button">Run Method</button>
+
+            <input type="file" id="fileInput" class="file-input" />
+            
+            <div id="filePreviewBox" class="file-preview-box"></div>
+        </div>
+
+        <!-- Parameter field for alpha -->
+        <div id="paramField" class="param-field">
+            <label for="alphaInput" class="param-label"> a (significance level):</label>
+            <input type="number" id="alphaInput" class="param-input" min="0" max="1" step="0.001" value="0.05" />
+        </div>
+
+    <!-- ========== ΕΔΩ ΜΠΑΙΝΕΙ ========== -->
+    <!-- Global Threshold Filter Parameters -->
+    <div id="globalThresholdPanel" class="global-threshold-panel" style="display: none;">
+        <div class="threshold-header">
+            <h4>Global Threshold Filter</h4>
+            <p>   </p>
+        </div>
+        <div class="threshold-controls">
+            <div class="threshold-group">
+                <label for="thresholdColumn">Select Column:</label>
+                <select id="thresholdColumn" class="threshold-select">
+                    <option value="auto">Auto-detect (first numeric column)</option>
+                </select>
+            </div>
+            <div class="threshold-group">
+                <label for="thresholdDirection">Direction:</label>
+                <select id="thresholdDirection" class="threshold-select">
+                    <option value="greater">Greater than or equal (≥)</option>
+                    <option value="less">Less than or equal (≤)</option>
+                </select>
+            </div>
+            <div class="threshold-group">
+                <label for="thresholdValue">Threshold Value:</label>
+                <input type="number" id="thresholdValue" class="threshold-input" step="any" value="0.5">
+            </div>
+            <button id="applyThresholdBtn" class="panel-button-results">Apply Filter</button>
+        </div>
+        <div id="columnPreview" class="column-preview" style="display: none;">
+            <small>Detected columns: <span id="detectedColumns"></span></small>
+        </div>
+    </div>
+
+    <!-- Method Information -->
+    <div id="methodInfoContainer" class="method-info-container">
+        <h3>Method Information</h3>
+        <div id="methodInfoText" class="method-info-text"></div>
+    </div>
+
+        <!-- Processing Panel -->
+        <div id="processingPanel" class="processing-panel" style="display: none;">
+            <div class="proc-header">
+                <div class="proc-title-row">
+                    <span class="proc-spinner"></span>
+                    <span class="proc-label">Running: </span>
+                    <span id="procMethodLabel" class="proc-method-label"></span>
+                </div>
+            </div>
+            <div class="progress-track">
+                <div id="progressBarFill" class="progress-fill"></div>
+            </div>
+            <div id="terminalOutput" class="terminal-output"></div>
+        </div>
+
+        <!-- File download section (when processing completes) -->
+        <div id="downloadSection" class="download-section">
+            <h3 class="download-title">Processing Complete</h3>
+            <p id="downloadMessage"></p>
+            <div class="download-buttons-row">
+                <button id="downloadBtn" class="panel-button-results download-button">Download Result</button>
+                <button id="compareNetworksInlineBtn" class="panel-button-results compare-btn" disabled style="opacity:0.5;">Compare Networks</button>
+                <button id="hideComparisonBtn" class="panel-button-results hide-btn" style="display: none;">✕ Hide Comparison</button>
+            </div>
+        </div>
+        
+        <!-- Network Visualization Section -->
+        <div id="visualizationSection" class="visualization-section" style="display: none;">
+            <div class="vis-header">
+                <div class="vis-title">
+                    <span class="vis-icon">⌗</span>
+                    <h3>Network Topology Comparison</h3>
+                </div>
+                <button id="closeVisSection" class="vis-close">×</button>
+            </div>
+            <div class="vis-body">
+                <div id="visLoading" class="vis-loading">
+                    <div class="vis-spinner"></div>
+                    <p>Generating network visualization...</p>
+                </div>
+                <div id="visContent" style="display: none;">
+                    <div class="comparison-wrapper">
+                        <div class="network-panel">
+                            <div class="panel-header before">
+                                <div class="panel-title">
+                                    <span class="panel-icon">⊡</span>
+                                    <span>Original Network</span>
+                                </div>
+                                <div class="panel-stats" id="statsBefore">-</div>
+                            </div>
+                            <div id="networkBefore" class="network-display"></div>
+                            <div class="panel-metrics" id="metricsBefore">
+                                <div class="metric-item">
+                                    <span class="metric-symbol">ω</span>
+                                    <span class="metric-value">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="vs-divider">
+                            <span>↯</span>
+                        </div>
+                        <div class="network-panel">
+                            <div class="panel-header after">
+                                <div class="panel-title">
+                                    <span class="panel-icon">⌗</span>
+                                    <span>Filtered Network</span>
+                                </div>
+                                <div class="panel-stats" id="statsAfter">-</div>
+                            </div>
+                            <div id="networkAfter" class="network-display"></div>
+                            <div class="panel-metrics" id="metricsAfter">
+                                <div class="metric-item">
+                                    <span class="metric-symbol">ω</span>
+                                    <span class="metric-value">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="comparison-footer">
+                        <div id="reductionInfo" class="reduction-badge"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div> <!-- Κλείσιμο main-panel -->
+
+    <script src="login.js"></script>
+</body>
+</html>

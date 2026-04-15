@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PRED-BiPN — Workflow Guide</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #e8eaed;
+    color: #1a1a1a;
+    min-height: 100vh;
+  }
+
+  /* ── NAV ── */
+  nav {
+    background: #1e2735;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 28px;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .nav-links a.active { color: #d8e4f8; border-color: #4a7ad0; }
+
+  /* ── MAIN ── */
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 36px 24px 60px;
+  }
+
+  .page-heading {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    color: #5a6a84;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+  }
+
+  /* ── STEP ROW ── */
+  .steps { display: flex; flex-direction: column; }
+
+  .step-row { display: flex; align-items: stretch; gap: 20px; }
+
+  .step-spine {
+    display: flex; flex-direction: column; align-items: center;
+    flex-shrink: 0; width: 40px;
+  }
+  .step-num {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: #1e2735; color: #d8e4f8;
+    font-size: 15px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    border: 2px solid #3a5080;
+    box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  }
+  .step-line {
+    width: 2px; flex: 1; min-height: 18px;
+    background: #c8d0dc; margin: 5px 0;
+  }
+
+  /* ── CARD ── */
+  .card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #d4dae4;
+    border-radius: 8px;
+    padding: 20px 22px 22px;
+    margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: 15px; font-weight: 600; color: #1a2234;
+    margin-bottom: 5px;
+  }
+  .card-desc {
+    font-size: 13px; color: #5a6880; line-height: 1.6;
+    margin-bottom: 16px;
+  }
+  .card-desc strong { color: #1a2234; }
+
+  /* ── SITE UI REPLICA ── */
+  .ui-strip {
+    background: #e8eaed;
+    border-radius: 6px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 11px;
+  }
+  .ui-btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .site-btn {
+    font-size: 13px; font-weight: 500;
+    padding: 7px 18px;
+    border-radius: 5px;
+    border: 1px solid #c0c8d4;
+    background: #fff;
+    color: #1a2234;
+    cursor: default;
+    white-space: nowrap;
+    letter-spacing: .01em;
+  }
+  .site-btn.active {
+    background: #fff;
+    border-color: #8aaad4;
+    color: #1a2234;
+    box-shadow: 0 0 0 2px #d4e4f8;
+  }
+  .site-btn.primary {
+    background: #2a3a5a;
+    color: #d8e4f8;
+    border-color: #2a3a5a;
+  }
+
+  /* Dropdown */
+  .dropdown {
+    background: #fff;
+    border: 1px solid #c0c8d4;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .dd-item {
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #2a3a54;
+    border-bottom: 1px solid #edf0f5;
+    cursor: default;
+  }
+  .dd-item:last-child { border-bottom: none; }
+  .dd-item:hover { background: #f2f5fa; }
+
+  /* Param input */
+  .param-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .param-row label { font-size: 13px; color: #3a4e68; }
+  .param-input {
+    font-size: 13px; padding: 5px 12px;
+    border: 1px solid #c0c8d4; border-radius: 5px;
+    background: #fff; color: #1a2234;
+    font-family: 'Courier New', monospace;
+    width: 80px;
+  }
+  .param-hint { font-size: 11.5px; color: #8a9ab4; }
+
+  /* File chooser */
+  .file-list {
+    background: #1e2735;
+    border-radius: 6px; overflow: hidden;
+    border: 1px solid #2e3f5a;
+  }
+  .file-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 14px;
+    font-size: 12.5px; color: #a8b8d0;
+    border-bottom: 1px solid #2a3a52;
+    cursor: default;
+  }
+  .file-item:last-child { border-bottom: none; }
+  .file-item.selected { background: #2a3f62; color: #d8e8ff; }
+  .file-item:hover:not(.selected) { background: #253348; }
+  .file-icon {
+    width: 14px; height: 16px;
+    border-radius: 2px; background: #3a5888;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .file-icon.sel { background: #5a80c0; }
+
+  /* Code preview */
+  .preview-block {
+    background: #f8fafc;
+    border: 1px solid #dde4ee;
+    border-radius: 6px;
+    padding: 11px 14px;
+    font-family: 'Courier New', monospace;
+    font-size: 11.5px;
+    color: #3a4e68;
+    line-height: 1.9;
+  }
+  .preview-head {
+    font-size: 10px; color: #8a9ab4;
+    letter-spacing: .06em; margin-bottom: 6px;
+    font-family: -apple-system, sans-serif;
+  }
+
+  /* Method info box */
+  .info-panel {
+    background: #fff;
+    border: 1px solid #d4dae4;
+    border-left: 4px solid #2a5aaa;
+    border-radius: 0 6px 6px 0;
+    padding: 14px 16px;
+  }
+  .info-panel-title {
+    font-size: 11.5px; font-weight: 700;
+    letter-spacing: .08em; color: #2a3a54;
+    margin-bottom: 10px;
+  }
+  .info-panel p {
+    font-size: 13px; color: #2a3a54; line-height: 1.7;
+    margin-bottom: 8px;
+  }
+  .info-panel strong { color: #1a2234; }
+  .info-panel em { color: #1a4a9a; font-style: italic; }
+  .info-panel code {
+    font-family: 'Courier New', monospace;
+    background: #eef2fa; padding: 1px 5px;
+    border-radius: 3px; font-size: 11.5px; color: #2a3a54;
+  }
+  .ref-line { font-size: 12px; color: #7a8aaa; font-style: italic; margin-top: 10px; }
+  .cite-pill {
+    display: inline-block; font-size: 12px;
+    color: #1a4a9a; background: #eef2fa;
+    border: 1px solid #c8d4ea;
+    border-radius: 5px; padding: 5px 12px;
+    margin-top: 8px;
+  }
+
+  /* Result bar */
+  .result-bar {
+    display: flex; align-items: center; gap: 10px;
+    background: #eef4ff; border: 1px solid #b8ccee;
+    border-radius: 6px; padding: 10px 16px;
+    font-size: 13px; color: #1a2a54;
+    margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .result-dot { width: 7px; height: 7px; border-radius: 50%; background: #2a8a4a; flex-shrink: 0; }
+  .result-filename { font-family: 'Courier New', monospace; font-size: 12px; color: #3a5a8a; }
+  .result-actions { margin-left: auto; display: flex; gap: 8px; }
+
+  .success-bar {
+    background: #eef8f2; border: 1px solid #a0ccb0;
+    border-radius: 6px; padding: 10px 16px;
+    font-size: 13px; color: #1a4a2a;
+    margin-bottom: 10px;
+  }
+
+  /* Network compare */
+  .net-compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin-top: 4px;
+  }
+  .net-panel {
+    background: #f8fafc; border: 1px solid #dde4ee;
+    border-radius: 7px; padding: 11px 13px;
+  }
+  .net-panel-title { font-size: 13px; font-weight: 600; color: #1a2234; margin-bottom: 2px; }
+  .net-panel-sub { font-size: 11px; color: #8a9ab4; margin-bottom: 8px; }
+
+  /* Tip */
+  .tip {
+    font-size: 12px; color: #4a5e7a; line-height: 1.6;
+    background: #f2f5fa; border-left: 3px solid #8aaad4;
+    border-radius: 0 5px 5px 0;
+    padding: 8px 12px; margin-top: 14px;
+  }
+  .tip strong { color: #1a2234; }
+  .tip em { color: #1a4a9a; font-style: normal; font-weight: 500; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">
+    <div class="nav-logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#7ab4f0" stroke-width="1.6">
+        <circle cx="5" cy="8" r="2.3"/><circle cx="19" cy="8" r="2.3"/>
+        <circle cx="5" cy="16" r="2.3"/><circle cx="19" cy="16" r="2.3"/>
+        <circle cx="12" cy="12" r="2.3"/>
+        <line x1="7.1" y1="9.1" x2="10" y2="11"/>
+        <line x1="14" y1="13" x2="16.9" y2="9.1"/>
+        <line x1="7.1" y1="14.9" x2="10" y2="13"/>
+        <line x1="14" y1="11" x2="16.9" y2="14.9"/>
+      </svg>
+    </div>
+  </div>
+
+</nav>
+
+<main>
+  <div class="page-heading">How to use PRED-BiPN &mdash; Step-by-step guide</div>
+
+  <div class="steps">
+
+    <!-- STEP 1 -->
+    <div class="step-row">
+      <div class="step-spine">
+        <div class="step-num">1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Choose a backbone extraction method</div>
+        <div class="card-desc">Click <strong>Choose Method</strong> and select one of the 23 available filtering algorithms from the dropdown. Each method uses a different statistical approach to extract the network backbone.</div>
+        <div class="ui-strip">
+          <div class="ui-btn-row">
+            <div class="site-btn active">Choose Method</div>
+            <div class="site-btn">Upload file</div>
+            <div class="site-btn">Info</div>
+          </div>
+          <div class="dropdown">
+            <div class="dd-item" style="background:#1e2735;color:#d8e4f8;font-weight:600;">1. Disparity Filter</div>
+            <div class="dd-item">2. Doubly Stochastic Filter</div>
+            <div class="dd-item">3. Hierarchical Backbone</div>
+            <div class="dd-item">4. High Salience Skeleton</div>
+            <div class="dd-item">5. Hypergraph Projection</div>
+            <div class="dd-item">6. Locally Adaptive Network Sparsification Filter</div>
+            <div class="dd-item">7. Marginal Likelihood Filter</div>
+            <div class="dd-item">8. Maximum Spanning Tree Filter</div>
+            <div class="dd-item">9. Modularity Filter</div>
+          </div>
+        </div>
+        <div class="tip"><strong>Tip:</strong> If you are unsure which method to use, read the method description first by clicking <em>Info</em> after selecting.</div>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step-row">
+      <div class="step-spine">
+        <div class="step-num">2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Read the method information</div>
+        <div class="card-desc">Click <strong>Info</strong> to view a detailed description of the selected method, what input format it requires, and its original scientific reference.</div>
+        <div class="info-panel">
+          <div class="info-panel-title">METHOD INFORMATION</div>
+          <p><strong>Disparity Filter</strong> aims to extract the <em>multiscale backbone</em> of a weighted bipartite network by retaining edges whose weights cannot be explained by random fluctuations. The method applies a <strong>local statistical comparison</strong> at each node, evaluating edge weights against a null model based on a Beta distribution. Edges with p-values lower than the significance level α are preserved, ensuring that important connections — especially those involving weak nodes — are retained.</p>
+          <p>This method needs a file (.csv or .tsv) with three columns <code>(Source&nbsp;&nbsp;Target&nbsp;&nbsp;Weight)</code> representing a weighted one-mode projected undirected network. If your data is bipartite (2 columns), use the <em>Simple Weighted Projection</em> method first.</p>
+          <div class="ref-line">Reference: Serrano, M. Á., Boguñá, M., &amp; Vespignani, A. (2009).</div>
+          <div class="cite-pill">PNAS, 106(16), 6483–6488</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step-row">
+      <div class="step-spine">
+        <div class="step-num">3</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Upload your network file</div>
+        <div class="card-desc">Click <strong>Upload file</strong> and select your .csv or .tsv file. A file preview of the first 10 rows will appear automatically so you can confirm the data loaded correctly.</div>
+        <div class="ui-strip">
+          <div class="ui-btn-row">
+            <div class="site-btn">Disparity Filter</div>
+            <div class="site-btn active">Upload file</div>
+            <div class="site-btn">Info</div>
+          </div>
+          <div class="file-list">
+            <div class="file-item selected">
+              <div class="file-icon sel"></div>
+              weighted_disease_edges_one_mode.tsv
+            </div>
+            <div class="file-item">
+              <div class="file-icon"></div>
+              weighted_gene_edges_one_mode.tsv
+            </div>
+            <div class="file-item">
+              <div class="file-icon"></div>
+              disease_to_all_genes.tsv
+            </div>
+            <div class="file-item">
+              <div class="file-icon"></div>
+              gene_to_all_diseases.tsv
+            </div>
+            <div class="file-item">
+              <div class="file-icon"></div>
+              data.txt
+            </div>
+            <div class="file-item">
+              <div class="file-icon"></div>
+              weighted_projection.py
+            </div>
+          </div>
+          <div class="preview-block">
+            <div class="preview-head">FILE PREVIEW &middot; weighted_disease_edges_one_mode.tsv &middot; First 10 lines</div>
+            <div>Source&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Target&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Weight</div>
+            <div>OTHER_DISEASES_OF_OESOPHAGUS&nbsp;&nbsp;&nbsp;&nbsp;ALZHEIMER'S_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1</div>
+            <div>OTHER_DISEASES_OF_OESOPHAGUS&nbsp;&nbsp;&nbsp;&nbsp;CEREBROVASCULAR_DISORDERS_IN_DISEASES_CLASSIFIED&nbsp;&nbsp;1</div>
+            <div>PARKINSON'S_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ULCERATIVE_COLITIS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3</div>
+            <div>PARKINSON'S_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;CHRONIC_ISCHAEMIC_HEART_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;4</div>
+            <div>PARKINSON'S_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SCHIZOPHRENIA&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1</div>
+            <div>PARKINSON'S_DISEASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;BONE_MINERAL_DENSITY&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1</div>
+          </div>
+        </div>
+        <div class="tip"><strong>Required format:</strong> 3 columns — Source, Target, Weight. If your data is bipartite with only 2 columns, use the <em>Simple Weighted Projection</em> method first to generate the 3-column file.</div>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step-row">
+      <div class="step-spine">
+        <div class="step-num">4</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Set parameters and run</div>
+        <div class="card-desc">Adjust any method-specific parameters — e.g. the significance level α for the Disparity Filter — then click <strong>Continue</strong> to execute the backbone extraction.</div>
+        <div class="ui-strip">
+          <div class="ui-btn-row">
+            <div class="site-btn">Disparity Filter</div>
+            <div class="site-btn">Upload file</div>
+            <div class="site-btn primary">Continue</div>
+            <div class="site-btn">Info</div>
+          </div>
+          <div class="param-row">
+            <label>α (significance level):</label>
+            <div class="param-input">0.05</div>
+            <div class="param-hint">Lower α → stricter filter → fewer edges retained</div>
+          </div>
+        </div>
+        <div class="tip"><strong>Default α = 0.05</strong> is a solid starting point. Increase it to keep more edges; decrease it for a sparser, more statistically significant backbone.</div>
+      </div>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step-row">
+      <div class="step-spine">
+        <div class="step-num">5</div>
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <div class="card-title">Inspect results and download</div>
+        <div class="card-desc">Once processing completes, compare the original and filtered networks side by side using <strong>Compare Networks</strong>, then download your result file.</div>
+
+        <div class="success-bar">
+          Download completed successfully! You can now select a new method and upload another file.
+        </div>
+
+        <div class="result-bar">
+          <div class="result-dot"></div>
+          Processing completed successfully.&nbsp;
+          <span class="result-filename">result_e084499d-9d5b-4a34-bd00-eaf157176191.csv</span>
+          <div class="result-actions">
+            <div class="site-btn primary" style="font-size:12px;padding:6px 14px;">Download Result</div>
+            <div class="site-btn" style="font-size:12px;padding:6px 14px;">Compare Networks</div>
+            <div class="site-btn" style="font-size:12px;padding:6px 14px;color:#5a6880;">✕ Hide Comparison</div>
+          </div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#5a6880;margin-bottom:10px;">NETWORK TOPOLOGY COMPARISON</div>
+
+        <div class="net-compare">
+          <div class="net-panel">
+            <div class="net-panel-title">Original Network</div>
+            <div class="net-panel-sub">998 nodes &nbsp;|&nbsp; 5,693 edges</div>
+            <canvas id="c-orig" style="width:100%;height:100px;display:block;border-radius:4px;"></canvas>
+          </div>
+          <div class="net-panel">
+            <div class="net-panel-title">Filtered Network</div>
+            <div class="net-panel-sub">90 nodes &nbsp;|&nbsp; 121 edges</div>
+            <canvas id="c-filt" style="width:100%;height:100px;display:block;border-radius:4px;"></canvas>
+          </div>
+        </div>
+
+        <div class="tip"><strong>Next step:</strong> Open the downloaded .csv in Gephi, Cytoscape, or any graph analysis tool for further visualisation and analysis of your backbone network.</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+const DPR = window.devicePixelRatio || 1;
+function sr(seed){let s=seed*9301+49297;return()=>{s=(s*9301+49297)%233280;return s/233280;}}
+
+function drawOrig(canvas){
+  const W=canvas.clientWidth||300, H=100;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(DPR,DPR);
+  ctx.fillStyle='#f8fafc'; ctx.fillRect(0,0,W,H);
+  const rand=sr(42), cx=W*.42, cy=H*.5, n=100;
+  const nodes=Array.from({length:n},()=>{
+    const a=rand()*Math.PI*2, r=Math.pow(rand(),.38)*Math.min(W,H)*.46;
+    return{x:cx+Math.cos(a)*r, y:cy+Math.sin(a)*r};
+  });
+  nodes.push({x:cx,y:cy});
+  const hub=nodes.length-1;
+  for(let i=0;i<n;i++){
+    if(rand()<.52){
+      ctx.beginPath(); ctx.moveTo(nodes[hub].x,nodes[hub].y); ctx.lineTo(nodes[i].x,nodes[i].y);
+      ctx.strokeStyle=`rgba(140,180,230,${.12+rand()*.22})`; ctx.lineWidth=.4+rand()*.5; ctx.stroke();
+    }
+    for(let j=i+1;j<n;j++){
+      if(rand()<.009){
+        ctx.beginPath(); ctx.moveTo(nodes[i].x,nodes[i].y); ctx.lineTo(nodes[j].x,nodes[j].y);
+        ctx.strokeStyle=`rgba(140,180,230,${.06+rand()*.1})`; ctx.lineWidth=.3; ctx.stroke();
+      }
+    }
+  }
+  nodes.forEach((nd,i)=>{
+    ctx.beginPath(); ctx.arc(nd.x,nd.y,i===hub?5.5:1.4,0,Math.PI*2);
+    ctx.fillStyle=i===hub?'#1e2f5a':`rgba(100,150,220,${.35+rand()*.45})`; ctx.fill();
+  });
+}
+
+function drawFilt(canvas){
+  const W=canvas.clientWidth||300, H=100;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(DPR,DPR);
+  ctx.fillStyle='#f8fafc'; ctx.fillRect(0,0,W,H);
+  const rand=sr(55), n=22, pad=14;
+  const nodes=Array.from({length:n},()=>({x:pad+rand()*(W-pad*2), y:pad+rand()*(H-pad*2), deg:0}));
+  const edges=[];
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+    if(rand()<.19){edges.push([i,j,.3+rand()*.7]); nodes[i].deg++; nodes[j].deg++;}
+  }
+  const mx=Math.max(...nodes.map(nd=>nd.deg),1);
+  edges.forEach(([a,b,w])=>{
+    ctx.beginPath(); ctx.moveTo(nodes[a].x,nodes[a].y); ctx.lineTo(nodes[b].x,nodes[b].y);
+    ctx.strokeStyle=`rgba(120,165,230,${.22+w*.42})`; ctx.lineWidth=.6+w*1.0; ctx.stroke();
+  });
+  nodes.forEach(nd=>{
+    const f=nd.deg/mx;
+    ctx.beginPath(); ctx.arc(nd.x,nd.y,f>.55?5.5:f>.28?3.5:2.2,0,Math.PI*2);
+    ctx.fillStyle=f>.5?'#1e2f5a':'#4a7ac0'; ctx.fill();
+  });
+}
+
+function init(){
+  const c1=document.getElementById('c-orig'), c2=document.getElementById('c-filt');
+  if(c1&&c1.clientWidth>0){ drawOrig(c1); drawFilt(c2); }
+  else setTimeout(init,120);
+}
+setTimeout(init,160);
+window.addEventListener('resize',()=>setTimeout(init,160));
+</script>
+
+</body>
+</html>
