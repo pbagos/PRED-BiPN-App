@@ -22,10 +22,12 @@ find_python() {
     if [ -x ".venv/bin/python" ]; then echo ".venv/bin/python"; return 0; fi
 
     # 2. Common commands on PATH
-    for cmd in python3 python; do
+    for cmd in python3 python python3.11; do
         if command -v "$cmd" >/dev/null 2>&1; then
-            ver=$("$cmd" --version 2>&1 | grep -oP '3\.\d+')
-            if [ -n "$ver" ]; then echo "$cmd"; return 0; fi
+            if "$cmd" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+                echo "$cmd"
+                return 0
+            fi
         fi
     done
     return 1
