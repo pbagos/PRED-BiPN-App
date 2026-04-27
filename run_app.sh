@@ -126,14 +126,14 @@ mkdir -p backend/tmp
 
 echo "[OK]   Starting server ..."
 echo ""
-echo "  URL:  http://localhost:5000"
+echo "  URL:  http://localhost:5050"
 echo "  Press Ctrl+C to stop the server"
 echo ""
 
 # Open browser in background (best-effort, ignore failures)
 ( sleep 2 && \
-  if command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:5000"; \
-  elif command -v open >/dev/null 2>&1; then open "http://localhost:5000"; fi \
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:5050"; \
+  elif command -v open >/dev/null 2>&1; then open "http://localhost:5050"; fi \
 ) >/dev/null 2>&1 &
 
 source .venv/bin/activate

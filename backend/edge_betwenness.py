@@ -7,7 +7,7 @@ import networkx as nx
 from collections import defaultdict, deque
 from multiprocessing import Pool, cpu_count
 import math
-from typing import List, Set, Dict, Tuple
+from typing import List, Set, Dict, Tuple, Optional
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -51,7 +51,7 @@ def brandes_algorithm_worker(sources, adjacency_dict, index_to_node):
 
 class GirvanNewmanOptimized:
 
-    def __init__(self, graph: nx.Graph, num_processes: int | None = None, logger=None, batch_size: int = 100):
+    def __init__(self, graph: nx.Graph, num_processes: Optional[int] = None, logger=None, batch_size: int = 100):
         self.original_graph = graph.copy()
         self.graph = graph.copy()
         self.num_processes = num_processes if num_processes else max(1, cpu_count() - 1)
@@ -137,7 +137,7 @@ class GirvanNewmanOptimized:
         return True
 
     def detect_communities(self, early_stopping: bool = True,
-                           max_iterations: int | None = None,
+                           max_iterations: Optional[int] = None,
                            min_communities: int = 2,
                            progress_callback=None) -> List[Set]:
         start_time = time.time()

@@ -8,6 +8,7 @@ import csv
 import os
 import uuid
 import pandas as pd
+from typing import Optional
 
 class GeneSimilarityResourceAllocation:
     """
@@ -28,7 +29,7 @@ class GeneSimilarityResourceAllocation:
         """
         self.sample_size = sample_size
         self.logger = logger
-        self.filepath: str | None = None
+        self.filepath: Optional[str] = None
         self.chunksize = 10000
         self.total_lines = 0
         self.gene_dict: dict = {}

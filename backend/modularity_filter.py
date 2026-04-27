@@ -1,6 +1,7 @@
 import networkx as nx
 import time
 import pandas as pd
+from typing import Optional, Dict
 from community import community_louvain
 from collections import defaultdict
 import numpy as np
@@ -29,10 +30,10 @@ class SparseModularityBackbone:
 
         self.adj_matrix = sparse.csr_matrix((data, (rows, cols)),
                                             shape=(self.n_nodes, self.n_nodes))
-        self.partition: dict | None = None
-        self.communities: dict | None = None
-        self.total_weight: float | None = None
-        self.community_metrics: dict | None = None
+        self.partition: Optional[Dict] = None
+        self.communities: Optional[Dict] = None
+        self.total_weight: Optional[float] = None
+        self.community_metrics: Optional[Dict] = None
 
     def compute_initial_partition(self):
         print("Computing initial partition using Louvain method...")

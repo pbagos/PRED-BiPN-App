@@ -126,12 +126,12 @@ if not exist "backend\tmp" mkdir "backend\tmp"
 
 echo [OK]   Starting server ...
 echo.
-echo   URL:  http://localhost:5000
+echo   URL:  http://localhost:5050
 echo   Press Ctrl+C to stop the server
 echo.
 
 REM Open default browser after a short delay
-start "" /b cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:5000"
+start "" /b cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:5050"
 
 REM Use venv python directly - avoids PATH/Store stub issues
 REM PYTHONUTF8=1 ensures correct encoding on non-English Windows (e.g. Greek)
