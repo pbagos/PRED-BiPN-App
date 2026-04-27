@@ -188,20 +188,6 @@ class JaccardSimilarityAnalyzer:
         else:
             raise ValueError("No valid data found to construct bipartite matrix")
 
-    def compute_one_mode_projection(self, mode='gene'):
-        if self.matrix is None:
-            raise ValueError("Bipartite matrix not constructed yet.")
-        self.log(f"One-mode projection: {mode}")
-        self.update_progress(50)
-        one_mode = self.matrix.dot(self.matrix.T) if mode == 'gene' \
-                   else self.matrix.T.dot(self.matrix)
-        one_mode.setdiag(0)
-        one_mode.eliminate_zeros()
-        self.log(f"One-mode: {one_mode.shape}, nnz={one_mode.nnz}")
-        self.one_mode_matrix = one_mode
-        self.update_progress(55)
-        return one_mode
-
     # ------------------------------------------------------------------
     # GENE-GENE path
     # ------------------------------------------------------------------
@@ -285,45 +271,74 @@ class JaccardSimilarityAnalyzer:
     # ------------------------------------------------------------------
     # Jaccard  (shared for both paths)
     # ------------------------------------------------------------------
-    def compute_jaccard_similarity(self, mode='gene', threshold=0.0, batch_size=10000):
+    def compute_jaccard_similarity(self, mode='gene', threshold=0.0):
         """
-        Bipartite path: uses self.one_mode_matrix (co-neighbour counts).
-        Gene-gene path: uses self.matrix directly (adjacency rows as neighbour sets).
+        Computes Jaccard similarity based on sets of neighbors.
+        Intersection = A * A^T
+        Union = deg(u) + deg(v) - Intersection
         """
         self.log(f"Computing Jaccard (threshold={threshold})...")
         self.update_progress(55)
 
-        source = self.one_mode_matrix if self.one_mode_matrix is not None else self.matrix
-        assert source is not None, "No matrix available — call construct_sparse_matrix first."
-        n      = source.shape[0]  # type: ignore[union-attr]
-        self.log(f"Matrix size: {n}×{n}")
+        if self.matrix is None:
+            raise ValueError("Matrix not constructed yet.")
 
-        csc                    = source.tocsc()
-        self.similarity_matrix = lil_matrix((n, n))
-        total_pairs            = n * (n - 1) // 2
-        processed              = 0
+        if mode == 'disease':
+            A = self.matrix.T.tocsr()
+        else:
+            A = self.matrix.copy()
 
-        with tqdm(total=total_pairs, desc="Computing similarities") as pbar:
-            for i in range(n):
-                vec_i = np.asarray(csc[:, i].todense()).flatten() > 0
-                for j in range(i + 1, n):
-                    if j % 1000 == 0: gc.collect()
-                    vec_j        = np.asarray(csc[:, j].todense()).flatten() > 0
-                    intersection = np.sum(vec_i & vec_j)
-                    union        = np.sum(vec_i | vec_j)
-                    if union > 0:
-                        sim = intersection / union
-                        if sim >= threshold:
-                            self.similarity_matrix[i, j] = sim
-                            self.similarity_matrix[j, i] = sim
-                    processed += 1
-                    if processed % batch_size == 0:
-                        pbar.update(batch_size)
-                        self.update_progress(55 + int(35 * processed / total_pairs))
-                del vec_i
-                if i % 100 == 0: gc.collect()
+        # Free original matrices to save memory
+        self.matrix = None
+        gc.collect()
 
-        self.similarity_matrix = self.similarity_matrix.tocsr()
+        # Jaccard is based on sets (binary existence of edge), so we binarize the adjacency matrix
+        A.data = np.ones_like(A.data)
+        
+        self.log("Computing intersections (A * A^T)...")
+        intersection_matrix = A.dot(A.T)
+        intersection_matrix.setdiag(0)
+        intersection_matrix.eliminate_zeros()
+        
+        # Array of neighbor counts for each node
+        degrees = np.array(A.sum(axis=1)).flatten()
+        
+        del A
+        gc.collect()
+        
+        self.log("Computing Jaccard similarities...")
+        coo = intersection_matrix.tocoo()
+        del intersection_matrix
+        gc.collect()
+        
+        # We only need upper triangle for undirected similarity to avoid double processing
+        mask = coo.row < coo.col
+        row = coo.row[mask]
+        col = coo.col[mask]
+        inter = coo.data[mask]
+        del coo
+        gc.collect()
+        
+        # union = |A| + |B| - |A n B|
+        union = degrees[row] + degrees[col] - inter
+        
+        sim = np.zeros_like(inter, dtype=float)
+        valid = union > 0
+        sim[valid] = inter[valid] / union[valid]
+        
+        # Apply threshold
+        thresh_mask = sim >= threshold
+        row = row[thresh_mask]
+        col = col[thresh_mask]
+        sim = sim[thresh_mask]
+        
+        # Symmetrize the final matrix
+        rows = np.concatenate([row, col])
+        cols = np.concatenate([col, row])
+        data = np.concatenate([sim, sim])
+        
+        n = len(degrees)
+        self.similarity_matrix = csr_matrix((data, (rows, cols)), shape=(n, n))
         self.log(f"Non-zero similarities: {self.similarity_matrix.nnz}")
         self.update_progress(90)
         return self.similarity_matrix
@@ -372,7 +387,6 @@ class JaccardSimilarityAnalyzer:
                 self.log("--- Gene-gene path ---")
                 self.build_mappings_gene_gene();           m1 = mem()
                 self.construct_sparse_matrix_gene_gene();  m2 = mem()
-                self.one_mode_matrix = None                # adjacency used directly
                 self.compute_jaccard_similarity(mode='gene_gene', threshold=threshold)
                 m3 = mem()
                 save_mode = 'gene'
@@ -381,9 +395,6 @@ class JaccardSimilarityAnalyzer:
                 self.log("--- Bipartite path ---")
                 self.build_mappings_bipartite();           m1 = mem()
                 self.construct_sparse_matrix_bipartite();  m2 = mem()
-                self.compute_one_mode_projection(mode=mode)
-                if self.matrix is not None:
-                    del self.matrix; self.matrix = None; gc.collect()
                 self.compute_jaccard_similarity(mode=mode, threshold=threshold)
                 m3 = mem()
                 save_mode = mode

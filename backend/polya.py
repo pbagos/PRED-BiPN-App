@@ -5,6 +5,7 @@ Polya Filter - Αριθμητικά Σταθερή Υλοποίηση για Ε�
 
 import numpy as np
 import scipy.special as sp
+import scipy.stats
 from typing import Tuple, Dict, Union, List, Optional
 import os
 import time
@@ -13,6 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 import gc
 import logging
+from scipy.optimize import minimize
 
 
 class PolyaFilter:
@@ -101,6 +103,53 @@ class PolyaFilter:
         except:
             self.has_header = False
             return False
+            
+    def get_ML_estimate(self) -> float:
+        """
+        Υπολογίζει την Maximum Likelihood εκτίμηση της παραμέτρου a,
+        οδηγώντας σε ultra-sparse backbones προσαρμοσμένα στην ετερογένεια του δικτύου.
+        """
+        w_list = []
+        k_list = []
+        s_list = []
+        for (u, v), w in self.adj_dict.items():
+            k_u, s_u = self.node_props[u]
+            k_v, s_v = self.node_props[v]
+            w_list.extend([w, w])
+            k_list.extend([k_u, k_v])
+            s_list.extend([s_u, s_v])
+            
+        w_arr = np.array(w_list)
+        k_arr = np.array(k_list)
+        s_arr = np.array(s_list)
+        
+        # Αφαίρεση συνδέσμων με degree 1
+        mask = k_arr > 1
+        w_arr = w_arr[mask]
+        k_arr = k_arr[mask]
+        s_arr = s_arr[mask]
+        
+        if len(w_arr) == 0:
+            self._log_message("  Warning: No links with degree > 1. Using a=1.0", 'warning')
+            return 1.0
+            
+        def nll(a_val):
+            a = a_val[0]
+            if a <= 0: return 1e10
+            A = 1.0 / a
+            B = (k_arr - 1.0) / a
+            
+            # Υπολογισμός log(Polya PDF)
+            log_p = (sp.gammaln(s_arr + 1) + sp.betaln(w_arr + A, s_arr - w_arr + B) 
+                     - sp.gammaln(w_arr + 1) - sp.gammaln(s_arr - w_arr + 1) - sp.betaln(A, B))
+            val = -np.sum(log_p)
+            if np.isinf(val) or np.isnan(val): return 1e10
+            return val
+
+        res = minimize(nll, x0=[0.5], bounds=[(1e-5, 15)], method='L-BFGS-B')
+        a_best = res.x[0]
+        self._log_message(f"  Estimation ended, a = {a_best:.6f}")
+        return float(a_best)
     
     def _log_polya_pmf(self, w: int, k: int, s: int, a: float) -> float:
         """
@@ -124,20 +173,40 @@ class PolyaFilter:
         except ValueError:
             return -np.inf
     
-    def polya_pvalue(self, w: float, k: int, s: float, a: float) -> float:
+    def polya_pvalue(self, w: float, k: int, s: float, a: float, apr_lvl: float = 10) -> float:
         """
-        Υπολογίζει την p-value π_P = P(X >= w) αυστηρά ως log-άθροισμα (Log-Sum-Exp).
+        Υπολογίζει την p-value π_P = P(X >= w).
+        Υποστηρίζει ασυμπτωτική προσέγγιση (apr_lvl > 0).
         """
+        if k == 1:
+            return 1.0
+            
         w_int = int(round(w))
         s_int = int(round(s))
         
-        if k == 1:
-            return 0.0 if w_int > 0 else 1.0
+        if a == 0:
+            return float(scipy.stats.binom.sf(w_int - 1, s_int, 1.0 / k))
+            
         if w_int <= 0:
             return 1.0
         if w_int > s_int:
             return 0.0
             
+        # Asymptotic Approximation Check (Eq. 6)
+        if apr_lvl > 0:
+            L = apr_lvl
+            idx1 = (s - w) >= L * ((k - 1) / a + 1)
+            idx2 = w >= L * max(1 / a, 1)
+            idx3 = s >= L * max(k / a, 1)
+            idx4 = k >= L * (a - 1 + 1e-20)
+            
+            if idx1 and idx2 and idx3 and idx4:
+                term1 = 1.0 / sp.gamma(1.0 / a)
+                term2 = (1.0 - w / s) ** ((k - 1) / a)
+                term3 = (w * k / (s * a)) ** (1.0 / a - 1.0)
+                return float(min(max(term1 * term2 * term3, 0.0), 1.0))
+        
+        # Exact Log-Sum-Exp Loop
         log_probs = []
         for x in range(w_int, s_int + 1):
             log_prob = self._log_polya_pmf(x, k, s_int, a)
@@ -153,40 +222,32 @@ class PolyaFilter:
         log_cumulative_prob = log_max + np.log(s_exp)
         p_value = np.exp(log_cumulative_prob)
         
-        return min(max(p_value, 0.0), 1.0)
+        return float(min(max(p_value, 0.0), 1.0))
 
     def compute_link_significance(self, w: float, node1: Tuple[int, float], 
-                                  node2: Tuple[int, float], a: float) -> Tuple[float, float]:
+                                  node2: Tuple[int, float], a: float, apr_lvl: float) -> Tuple[float, float]:
         """Υπολογισμός p-values από τις δύο οπτικές γωνίες των κόμβων."""
         k1, s1 = node1
         k2, s2 = node2
         
-        p1 = self.polya_pvalue(w, k1, s1, a)
-        p2 = self.polya_pvalue(w, k2, s2, a)
+        p1 = self.polya_pvalue(w, k1, s1, a, apr_lvl)
+        p2 = self.polya_pvalue(w, k2, s2, a, apr_lvl)
             
         return p1, p2
     
     def load_network_data(self, file_path: str, directed: bool = False, chunksize: int = 100000):
         """
         Φορτώνει δεδομένα από αρχείο χρησιμοποιώντας POSITIONAL ACCESS (iloc[0], iloc[1], iloc[2]).
-        
-        Args:
-            file_path (str): Διαδρομή προς το αρχείο εισόδου
-            directed (bool): Αν το δίκτυο είναι κατευθυνόμενο
-            chunksize (int): Μέγεθος chunk για ανάγνωση
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Το αρχείο {file_path} δεν βρέθηκε.")
         
-        # Step 1: Detect separator
         self._detect_separator(file_path)
         self._log_message(f"  Detected separator: {repr(self.detected_sep)}")
         
-        # Step 2: Detect header
         self._detect_header(file_path, self.detected_sep)
         self._log_message(f"  Detected header: {'Yes' if self.has_header else 'No'}")
         
-        # Step 3: Count rows for progress bar
         self._log_message("  Counting rows...")
         total_rows = 0
         with open(file_path, 'r') as f:
@@ -196,7 +257,6 @@ class PolyaFilter:
                 total_rows += 1
         self._log_message(f"  Total rows: {total_rows:,}")
         
-        # Step 4: FIRST PASS - Read all edges and compute node properties
         self._log_message("\n" + "="*60)
         self._log_message("FIRST PASS: Computing node properties")
         self._log_message("="*60)
@@ -216,11 +276,9 @@ class PolyaFilter:
         
         for chunk in tqdm(chunk_reader, total=total_chunks, desc="  Processing"):
             for _, row in chunk.iterrows():
-                # POSITIONAL ACCESS: iloc[0], iloc[1], iloc[2]
                 u = str(row.iloc[0]).strip()
                 v = str(row.iloc[1]).strip()
                 
-                # Try to get weight from iloc[2], default to 1.0 if not available
                 if len(row) > 2:
                     try:
                         w = float(row.iloc[2])
@@ -229,23 +287,17 @@ class PolyaFilter:
                 else:
                     w = 1.0
                 
-                # Skip invalid rows
                 if not u or not v or u == 'nan' or v == 'nan' or w <= 0:
                     continue
-                
-                # Skip self-loops
                 if u == v:
                     continue
-                
-                # Normalize for undirected networks
                 if not directed and u > v:
                     u, v = v, u
                 
                 edge_list.append((u, v, w))
                 
-                # Initialize node properties
                 if u not in node_properties:
-                    node_properties[u] = [0, 0.0]  # [degree, strength]
+                    node_properties[u] = [0, 0.0]
                 if not directed and v not in node_properties:
                     node_properties[v] = [0, 0.0]
                 
@@ -256,13 +308,11 @@ class PolyaFilter:
                     node_properties[v][0] += 1
                     node_properties[v][1] += w
         
-        # Convert to tuples
-        self.node_props = {node: (int(props[0]), props[1]) 
+        self.node_props = {node: (int(props[0]), float(props[1])) 
                           for node, props in node_properties.items() if props[0] > 0}
         
         self._log_message(f"\n  Found {len(self.node_props):,} unique nodes")
         
-        # Step 5: SECOND PASS - Build adjacency dictionary with unique edges
         self._log_message("\n" + "="*60)
         self._log_message("SECOND PASS: Building adjacency dictionary")
         self._log_message("="*60)
@@ -272,11 +322,9 @@ class PolyaFilter:
         
         for u, v, w in tqdm(edge_list, desc="  Building edges"):
             edge_key = (u, v)
-            
             if edge_key in processed_edges:
                 continue
-            
-            self.adj_dict[edge_key] = w
+            self.adj_dict[edge_key] = float(w)
             processed_edges.add(edge_key)
         
         self._log_message(f"\n  Unique edges: {len(self.adj_dict):,}")
@@ -297,15 +345,28 @@ class PolyaFilter:
         num_links = len(self.adj_dict)
         num_tests = num_links if directed else 2 * num_links  # L
         
+        # Maximum Likelihood Estimation (a < 0)
+        if a < 0:
+            self._log_message("\n" + "="*60)
+            self._log_message("ESTIMATING PARAMETER 'a' VIA MAXIMUM LIKELIHOOD")
+            self._log_message("="*60)
+            a = self.get_ML_estimate()
+        
+        # Check if approximation level should be used
+        has_non_int = any(w % 1 != 0 for w in self.adj_dict.values())
+        apr_lvl = 0 if has_non_int else 10
+        if has_non_int:
+            self._log_message("  Non-integer weights detected. Asymptotic approximation disabled (apr_lvl=0).")
+        
         p_values = []
         edges_data = []
         
         self._log_message("\n" + "="*60)
         self._log_message(f"CALCULATING P-VALUES (L = {num_tests:,})")
         self._log_message(f"  Parameter a = {a}")
+        self._log_message(f"  Approximation level = {apr_lvl}")
         self._log_message("="*60)
         
-        # Υπολογισμός p-values για όλες τις ακμές
         for (i, j), weight in tqdm(self.adj_dict.items(), desc="  Computing p-values"):
             if i not in self.node_props or j not in self.node_props: 
                 continue
@@ -313,14 +374,13 @@ class PolyaFilter:
             node_i = self.node_props[i]
             node_j = self.node_props[j]
             
-            p1, p2 = self.compute_link_significance(weight, node_i, node_j, a)
+            p1, p2 = self.compute_link_significance(weight, node_i, node_j, a, apr_lvl)
             
             p_values.append(min(p1, p2))
             edges_data.append(((i, j), weight, p1, p2))
             
         self.stats['total_p_values'] = len(p_values)
         
-        # Εφαρμογή διόρθωσης πολλαπλών συγκρίσεων
         self._log_message("\n" + "="*60)
         self._log_message(f"MULTIPLE COMPARISON CORRECTION - Method: {self.method.upper()}")
         self._log_message("="*60)
@@ -342,9 +402,8 @@ class PolyaFilter:
             rejected, p_corrected, _, _ = multipletests(p_values, alpha=self.alpha_u, method='fdr_bh')
             self._log_message(f"  FDR (Benjamini/Hochberg) applied.")
             self._log_message(f"  Significant edges: {sum(rejected):,}")
-            self.stats['significant_fdr'] = sum(rejected)
+            self.stats['significant_fdr'] = int(sum(rejected))
         
-        # Δημιουργία λίστας με τις σημαντικές ακμές
         backbone_edges = []
         for idx, (edge, weight, p1, p2) in enumerate(edges_data):
             if rejected[idx]:
@@ -391,7 +450,6 @@ class PolyaFilter:
             self._log_message("SAVING RESULTS")
             self._log_message("="*60)
             
-            # Save as CSV with standard columns
             df_results = []
             for node1, node2, w, min_p, p1, p2, r in backbone_edges:
                 df_results.append([node1, node2, w, min_p])
@@ -403,7 +461,6 @@ class PolyaFilter:
             self._log_message(f"     Columns: source, target, weight, p_value")
             self._log_message(f"     Total edges: {len(backbone_edges):,}")
             
-            # Also save detailed results with all statistics
             detailed_file = output_file.replace('.tsv', '_detailed.tsv')
             df_detailed = pd.DataFrame(backbone_edges, 
                                         columns=['source', 'target', 'weight', 
@@ -412,7 +469,6 @@ class PolyaFilter:
             df_detailed.to_csv(detailed_file, index=False, sep='\t')
             self._log_message(f"  Detailed results: {detailed_file}")
             
-            # Save statistics summary
             stats_file = output_file.replace('.tsv', '_stats.txt')
             self.save_summary_stats(stats_file)
             
@@ -487,16 +543,6 @@ class PolyaFilter:
                           chunksize: int = 100000) -> Dict:
         """
         Εκτελεί πλήρη ανάλυση Polya Filter με POSITIONAL ACCESS.
-        
-        Args:
-            input_file (str): Διαδρομή προς το αρχείο εισόδου
-            output_file (str): Διαδρομή για το αρχείο εξόδου (CSV)
-            a (float): Παράμετρος Polya (a=1.0 για Disparity Filter)
-            directed (bool): Αν το δίκτυο είναι κατευθυνόμενο
-            chunksize (int): Μέγεθος chunk για ανάγνωση
-            
-        Returns:
-            Dict: Λεξικό με αποτελέσματα και στατιστικά
         """
         start_time = time.time()
         
@@ -512,13 +558,8 @@ class PolyaFilter:
         self._log_message("="*60)
         
         try:
-            # Load data with positional access
             self.load_network_data(input_file, directed=directed, chunksize=chunksize)
-            
-            # Extract backbone
             backbone_edges = self.extract_backbone(a, directed)
-            
-            # Save results as CSV with source, target, weight, p_value
             self.save_results(backbone_edges, output_file)
             
             total_time = time.time() - start_time
@@ -541,7 +582,7 @@ class PolyaFilter:
                 'nodes': self.stats.get('nodes', 0),
                 'method': self.method,
                 'alpha': self.alpha_u,
-                'a_parameter': a,
+                'a_parameter': a, # Will contain ML estimated 'a' if initially < 0
                 'total_time': total_time,
                 'column_info': self.get_column_info(),
                 'stats': self.stats
@@ -558,21 +599,9 @@ class PolyaFilter:
             }
 
 
-# Factory function with logger support
 def create_polya_filter(significance_level: float = 0.05, 
                         method: str = 'fdr', 
                         logger: Optional[logging.Logger] = None) -> PolyaFilter:
-    """
-    Create and return a PolyaFilter instance.
-    
-    Args:
-        significance_level (float): Significance level (α_u)
-        method (str): Multiple comparison method ('bonferroni' or 'fdr')
-        logger (logging.Logger): Optional logger instance
-        
-    Returns:
-        PolyaFilter: Configured PolyaFilter instance
-    """
     return PolyaFilter(
         significance_level=significance_level,
         method=method,
@@ -580,26 +609,10 @@ def create_polya_filter(significance_level: float = 0.05,
     )
 
 
-# Backward compatibility function
 def run_polya_filter(input_file: str, output_file: str, 
                      alpha: float = 0.05, method: str = 'fdr',
                      a: float = 1.0, directed: bool = False,
                      logger: Optional[logging.Logger] = None) -> Dict:
-    """
-    Run Polya filter analysis.
-    
-    Args:
-        input_file (str): Path to input file
-        output_file (str): Path to output file (CSV)
-        alpha (float): Significance level
-        method (str): Correction method ('bonferroni' or 'fdr')
-        a (float): Polya parameter
-        directed (bool): Whether network is directed
-        logger (logging.Logger): Optional logger instance
-        
-    Returns:
-        Dict: Analysis results
-    """
     filter_instance = create_polya_filter(
         significance_level=alpha,
         method=method,
@@ -614,7 +627,6 @@ def run_polya_filter(input_file: str, output_file: str,
     )
 
 
-# --- Application ---
 if __name__ == '__main__':
     import argparse
     
@@ -629,7 +641,7 @@ if __name__ == '__main__':
     parser.add_argument('--method', choices=['bonferroni', 'fdr'], default='fdr', 
                        help='Correction method (default: fdr)')
     parser.add_argument('--a', type=float, default=1.0, 
-                       help='Polya parameter (a=1.0 = Disparity Filter, default: 1.0)')
+                       help='Polya parameter (a=1.0 = Disparity Filter, a<0 = ML Estimation)')
     parser.add_argument('--directed', action='store_true', 
                        help='Directed network (default: undirected)')
     parser.add_argument('--chunksize', type=int, default=100000, 
@@ -637,13 +649,11 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
-    # Create filter
     polya_filter = create_polya_filter(
         significance_level=args.alpha,
         method=args.method
     )
     
-    # Run analysis
     results = polya_filter.run_full_analysis(
         input_file=args.input_file,
         output_file=args.output_file,

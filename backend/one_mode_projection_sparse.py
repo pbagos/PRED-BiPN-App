@@ -6,7 +6,7 @@ Reads any file format using positional access (no predefined column names):
     iloc[0] → entity A (gene)
     iloc[1] → entity B (disease)
 
-Output CSV columns: source, target, weight
+Output CSV columns: source, target
 """
 
 import os
@@ -185,17 +185,17 @@ class OneModeProjection:
     
     def _write_edges(self, projection_matrix, labels, output_filename):
         """
-        Writes upper-triangle edges as CSV with header: source, target, weight
+        Writes upper-triangle edges as CSV with header: source, target
         Uses comma separator. Skips diagonal and edges with weight <= threshold.
         """
         coo = projection_matrix.tocoo()
         
         edge_count = 0
         with open(output_filename, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\n")
+            f.write("source\ttarget\n")
             for row, col, weight in zip(coo.row, coo.col, coo.data):
                 if row < col and weight > self.threshold:
-                    f.write(f"{labels[row]}\t{labels[col]}\t{weight}\n")
+                    f.write(f"{labels[row]}\t{labels[col]}\n")
                     edge_count += 1
         
         self._log(f"Saved: {output_filename} with {edge_count} edges")

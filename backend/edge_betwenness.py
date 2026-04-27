@@ -21,6 +21,34 @@ import pandas as pd
 from tqdm import tqdm
 
 
+def brandes_algorithm_worker(sources, adjacency_dict, index_to_node):
+    local_betweenness = defaultdict(float)
+    for source in sources:
+        source_node = index_to_node[source]
+        S, P, sigma = [], defaultdict(list), defaultdict(float)
+        sigma[source_node] = 1.0
+        d = defaultdict(lambda: -1)
+        d[source_node] = 0
+        Q = deque([source_node])
+        while Q:
+            v = Q.popleft()
+            S.append(v)
+            for w in adjacency_dict[v]:
+                if d[w] < 0:
+                    Q.append(w); d[w] = d[v] + 1
+                if d[w] == d[v] + 1:
+                    sigma[w] += sigma[v]; P[w].append(v)
+        delta = defaultdict(float)
+        while S:
+            w = S.pop()
+            for v in P[w]:
+                edge = tuple(sorted((v, w)))
+                c = (sigma[v] / sigma[w]) * (1.0 + delta[w])
+                local_betweenness[edge] += c
+                delta[v] += c
+    return local_betweenness
+
+
 class GirvanNewmanOptimized:
 
     def __init__(self, graph: nx.Graph, num_processes: int | None = None, logger=None, batch_size: int = 100):
@@ -57,47 +85,21 @@ class GirvanNewmanOptimized:
     def _normalize_edge(self, edge: Tuple) -> Tuple:
         return tuple(sorted(edge))
 
-    def _brandes_algorithm_batch(self, sources: List[int]) -> Dict[Tuple, float]:
-        local_betweenness = defaultdict(float)
-        for source in sources:
-            source_node = self.index_to_node[source]
-            S, P, sigma = [], defaultdict(list), defaultdict(float)
-            sigma[source_node] = 1.0
-            d = defaultdict(lambda: -1)
-            d[source_node] = 0
-            Q = deque([source_node])
-            while Q:
-                v = Q.popleft()
-                S.append(v)
-                for w in self.adjacency_dict[v]:
-                    if d[w] < 0:
-                        Q.append(w); d[w] = d[v] + 1
-                    if d[w] == d[v] + 1:
-                        sigma[w] += sigma[v]; P[w].append(v)
-            delta = defaultdict(float)
-            while S:
-                w = S.pop()
-                for v in P[w]:
-                    edge = self._normalize_edge((v, w))
-                    c = (sigma[v] / sigma[w]) * (1.0 + delta[w])
-                    local_betweenness[edge] += c
-                    delta[v] += c
-        return local_betweenness
-
     def _calculate_edge_betweenness_parallel(self) -> Dict[Tuple, float]:
         n = len(self.node_list)
         total_betweenness = defaultdict(float)
         all_nodes = list(range(n))
-        batches = [all_nodes[i:i + self.batch_size] for i in range(0, n, self.batch_size)]
-        self._log(f"Betweenness for {len(batches)} batches...")
-        for batch_idx, batch in enumerate(batches):
-            with Pool(self.num_processes) as pool:
-                chunk_size = max(1, len(batch) // self.num_processes)
-                node_chunks = [batch[i:i + chunk_size] for i in range(0, len(batch), chunk_size)]
-                for result in pool.map(self._brandes_algorithm_batch, node_chunks):
-                    for edge, val in result.items():
-                        total_betweenness[edge] += val
-            gc.collect()
+        
+        chunk_size = max(1, n // (self.num_processes * 4))
+        node_chunks = [all_nodes[i:i + chunk_size] for i in range(0, n, chunk_size)]
+        
+        args = [(chunk, self.adjacency_dict, self.index_to_node) for chunk in node_chunks]
+        
+        with Pool(self.num_processes) as pool:
+            for result in pool.starmap(brandes_algorithm_worker, args):
+                for edge, val in result.items():
+                    total_betweenness[edge] += val
+        
         for edge in total_betweenness:
             total_betweenness[edge] = round(total_betweenness[edge] / 2, 6)
         return total_betweenness
@@ -144,6 +146,7 @@ class GirvanNewmanOptimized:
             progress_callback(10)
         max_modularity = -math.inf
         best_communities: List[Set] = []
+        best_graph = self.graph.copy()
         iteration = 0
         no_improvement_count = 0
         total_iterations = max_iterations if max_iterations else 20
@@ -165,7 +168,10 @@ class GirvanNewmanOptimized:
                 self.modularity_history.append(q)
                 self._log(f"Step {iteration}: {len(current_communities)} communities, Q={q}")
                 if q > max_modularity:
-                    max_modularity = q; best_communities = current_communities; no_improvement_count = 0
+                    max_modularity = q
+                    best_communities = current_communities
+                    best_graph = self.graph.copy()
+                    no_improvement_count = 0
                 else:
                     no_improvement_count += 1
                 if early_stopping and no_improvement_count >= 3:
@@ -183,6 +189,11 @@ class GirvanNewmanOptimized:
         self._log(f"Done in {self.runtime:.2f}s | {len(best_communities)} communities | Q={max_modularity}")
         if progress_callback:
             progress_callback(100)
+            
+        # Retain the network state with the highest modularity for edgelist output
+        if best_communities:
+            self.graph = best_graph
+            
         return best_communities if best_communities else current_communities
 
     def visualize_network(self, communities, output_path, show_labels=True, show_edges=True):
@@ -247,6 +258,20 @@ class GirvanNewmanOptimized:
                         f.write(f"{node}\t{comm_id}\t{comm_size}\n")
         except Exception as e:
             self._log(f"Save error: {e}")
+            
+    def save_edgelist_to_file(self, filename: str):
+        """
+        Saves the filtered network (remaining edges) as TSV.
+        Columns: Source, Target, Weight
+        """
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write("Source\tTarget\tWeight\n")
+                for u, v in self.graph.edges():
+                    w = self.original_graph[u][v].get('weight', 1.0) if self.original_graph.has_edge(u, v) else 1.0
+                    f.write(f"{u}\t{v}\t{w}\n")
+        except Exception as e:
+            self._log(f"Save edgelist error: {e}")
 
     def get_communities_summary(self, communities: List[Set]) -> List[Dict]:
         return [{'id': i + 1, 'size': len(c), 'nodes': sorted(list(c))[:5]}
@@ -363,6 +388,10 @@ def run_girvan_newman_analysis(input_file, output_dir, max_lines=500, num_proces
         communities_file = os.path.join(output_dir, f"communities_{task_id}.tsv")
         gn.save_communities_to_file(communities, communities_file)
         results['communities_file'] = os.path.basename(communities_file)
+        
+        edgelist_file = os.path.join(output_dir, f"result_{task_id}.tsv")
+        gn.save_edgelist_to_file(edgelist_file)
+        results['result_file'] = os.path.basename(edgelist_file)
 
         if G.number_of_nodes() < 1000:
             network_img = os.path.join(output_dir, f"network_{task_id}.png")
