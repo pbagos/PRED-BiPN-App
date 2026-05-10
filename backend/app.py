@@ -42,7 +42,7 @@ from jaccard import run_jaccard_analysis, JaccardSimilarityAnalyzer
 from kendall import run_kendall_analysis
 from spearman import run_spearman_analysis
 from pearson import run_pearson_analysis
-from edge_betwenness import run_girvan_newman_analysis
+from edge_betweenness import run_girvan_newman_analysis
 from global_threshold import run_global_threshold
 
 # ==================== FLASK APP INITIALIZATION ====================
@@ -131,7 +131,7 @@ def _execute_processing(data, task_id):
 
             if method.lower() == 'disparity filter':
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                run_disparity_filter(input_path, output_path, alpha=alpha, progress_callback=None)
+                run_disparity_filter(input_path, output_path, alpha=alpha, n_workers=cpu_count(), progress_callback=None)
                 result_files = {'result_file': os.path.basename(output_path)}
 
             elif method.lower() == 'one mode projection':
@@ -314,16 +314,24 @@ def _execute_processing(data, task_id):
                 correction_method = data.get('correction_method', 'fdr')
                 directed = str(data.get('directed', 'false')).lower() == 'true'
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
-                polya_filter = create_polya_filter(significance_level=alpha, method=correction_method, logger=app.logger)
+                polya_filter = create_polya_filter(significance_level=alpha, method=correction_method, logger=app.logger, n_workers=cpu_count())
                 results = polya_filter.run_full_analysis(
                     input_file=input_path, output_file=output_path, a=a_param, directed=directed
                 )
                 if not results['success']:
                     raise RuntimeError(results.get('error', 'Polya filter failed'))
                 result_files = {'result_file': os.path.basename(output_path)}
+                backbone_count = results.get('edges_backbone', 0)
+                warning = None
+                if backbone_count == 0:
+                    warning = (
+                        f"No backbone edges survived the {correction_method.upper()} correction. "
+                        "Try using ML estimation (a=-1), a higher alpha, or Bonferroni correction."
+                    )
+                    app.logger.warning(warning)
                 response_data = {
                     'success': True, 'task_id': task_id, 'files': result_files,
-                    'stats': results
+                    'stats': results, 'warning': warning
                 }
 
             elif method.lower() == "cosine similarity weighted projection":
@@ -351,7 +359,7 @@ def _execute_processing(data, task_id):
                 stats, output_filename = run_adamic_adar_similarity(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
                     threshold=threshold, sample_size=sample_size,
-                    logger=app.logger, progress_callback=None
+                    logger=app.logger, progress_callback=None, n_workers=cpu_count()
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Adamic-Adar failed'))
@@ -369,7 +377,7 @@ def _execute_processing(data, task_id):
                 stats, output_filename = run_resource_allocation_similarity(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
                     threshold=threshold, sample_size=sample_size,
-                    logger=app.logger, progress_callback=None
+                    logger=app.logger, progress_callback=None, n_workers=cpu_count()
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Resource Allocation failed'))

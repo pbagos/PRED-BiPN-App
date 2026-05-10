@@ -960,10 +960,14 @@ function setupChooseMethod() {
         `;
         methodInfoContainer.style.display = 'block';
 
+        const polyaPanel = document.getElementById('polyaPanel');
         if (ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
             paramField.style.display = 'block';
         } else {
             paramField.style.display = 'none';
+        }
+        if (polyaPanel) {
+            polyaPanel.style.display = selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
         }
     }
 
@@ -1137,6 +1141,13 @@ continueBtn.addEventListener('click', async () => {
             method: selectedMethod,
             alpha: alphaValue
         };
+
+        if (selectedMethod.toLowerCase() === 'polya filter') {
+            requestData.alpha = parseFloat(document.getElementById('polyaAlpha')?.value) || 0.05;
+            requestData.a_parameter = parseFloat(document.getElementById('polyaA')?.value) ?? 1.0;
+            requestData.correction_method = document.getElementById('polyaCorrection')?.value || 'fdr';
+            requestData.directed = document.getElementById('polyaDirected')?.value || 'false';
+        }
 
         if (selectedMethod.toLowerCase() === 'global threshold filter') {
             const thresholdParams = sessionStorage.getItem('threshold_params');
@@ -1365,14 +1376,16 @@ function showGuideContent() {
     if (paramField) paramField.style.display = 'none';
     if (downloadSection) downloadSection.style.display = 'none';
     if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
+    const polyaPanelGuide = document.getElementById('polyaPanel');
+    if (polyaPanelGuide) polyaPanelGuide.style.display = 'none';
     if (visualizationSection) visualizationSection.style.display = 'none';
-    
+
     // Κρύβουμε και τα κουμπιά που μπορεί να είναι ορατά
     if (continueBtn) continueBtn.style.display = 'none';
     if (uploadBtn) uploadBtn.style.display = 'none';
     const methodDropdownGroup = document.getElementById('methodDropdownGroup');
     if (methodDropdownGroup) methodDropdownGroup.style.display = 'none';
-    
+
     // Κρύβουμε το file preview box
     const previewBox = document.getElementById('filePreviewBox');
     if (previewBox) previewBox.style.display = 'none';
@@ -1672,10 +1685,14 @@ function hideGuideContent() {
     } else {
         if (paramField) paramField.style.display = 'none';
     }
-    
+    const polyaPanelHide = document.getElementById('polyaPanel');
+    if (polyaPanelHide) {
+        polyaPanelHide.style.display = selectedMethod && selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
+    }
+
     if (downloadSection) downloadSection.style.display = 'none';
     if (previewBox) previewBox.style.display = 'none';
-    
+
     isGuideVisible = false;
 }
 
@@ -1725,6 +1742,8 @@ function showInfoContent() {
     if (paramField) paramField.style.display = 'none';
     if (downloadSection) downloadSection.style.display = 'none';
     if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
+    const polyaPanelInfo = document.getElementById('polyaPanel');
+    if (polyaPanelInfo) polyaPanelInfo.style.display = 'none';
     if (visualizationSection) visualizationSection.style.display = 'none';
     if (continueBtn) continueBtn.style.display = 'none';
     if (uploadBtn) uploadBtn.style.display = 'none';
@@ -1806,6 +1825,10 @@ function hideInfoContent() {
         if (paramField) paramField.style.display = 'block';
     } else {
         if (paramField) paramField.style.display = 'none';
+    }
+    const polyaPanelInfoHide = document.getElementById('polyaPanel');
+    if (polyaPanelInfoHide) {
+        polyaPanelInfoHide.style.display = selectedMethod && selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
     }
 
     if (downloadSection) downloadSection.style.display = 'none';
@@ -2280,6 +2303,10 @@ function resetToMainPage() {
     const globalThresholdPanel = document.getElementById('globalThresholdPanel');
     if (globalThresholdPanel) {
         globalThresholdPanel.style.display = 'none';
+    }
+    const polyaPanelReset = document.getElementById('polyaPanel');
+    if (polyaPanelReset) {
+        polyaPanelReset.style.display = 'none';
     }
     
     // 7. Κρύψιμο του download section

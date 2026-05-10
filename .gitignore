@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Temp output files (algorithm results, uploads, generated images)
+backend/tmp/
+backend/sparse_matrix.npz
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*

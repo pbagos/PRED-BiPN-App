@@ -9,6 +9,31 @@ import os
 import uuid
 import pandas as pd
 from typing import Optional
+from multiprocessing import Pool, cpu_count
+
+
+def _resource_allocation_gene_batch(args):
+    """Compute Resource Allocation similarities for a slice of gene indices."""
+    i_start, i_end, genes, neighbors_dict, degrees, threshold = args
+    results = []
+    n = len(genes)
+    for i in range(i_start, i_end):
+        gene1 = genes[i]
+        nb1 = neighbors_dict.get(gene1)
+        if nb1 is None:
+            continue
+        for j in range(i + 1, n):
+            gene2 = genes[j]
+            nb2 = neighbors_dict.get(gene2)
+            if nb2 is None:
+                continue
+            common = nb1 & nb2
+            if not common:
+                continue
+            weight = sum(1.0 / degrees[c] for c in common if degrees.get(c, 0) > 0)
+            if weight >= threshold:
+                results.append((gene1, gene2, weight))
+    return results
 
 class GeneSimilarityResourceAllocation:
     """
@@ -19,16 +44,18 @@ class GeneSimilarityResourceAllocation:
     όπου Γ(u) είναι οι γείτονες του κόμβου u.
     """
     
-    def __init__(self, sample_size=1000, logger=None):
+    def __init__(self, sample_size=1000, logger=None, n_workers=1):
         """
         Αρχικοποίηση της κλάσης.
-        
+
         Args:
             sample_size (int): Αριθμός γραμμών για επεξεργασία
             logger: Logger object για καταγραφή μηνυμάτων
+            n_workers (int): Number of parallel worker processes
         """
         self.sample_size = sample_size
         self.logger = logger
+        self.n_workers = n_workers
         self.filepath: Optional[str] = None
         self.chunksize = 10000
         self.total_lines = 0
@@ -350,52 +377,34 @@ class GeneSimilarityResourceAllocation:
         genes = list(self.gene_index.keys())
         self.G = nx.Graph()
         self.edges_to_export = []
-        
-        # Precompute degrees for all nodes
+
         degrees = dict(self.bipartite_graph.degree())
-        
-        total_pairs = len(genes) * (len(genes) - 1) // 2
-        processed_pairs = 0
-        last_progress = 60
-        
-        for i, gene1 in enumerate(genes):
-            # Get neighbors of gene1 (diseases)
-            try:
-                neighbors1 = set(self.bipartite_graph.neighbors(gene1))
-            except:
-                # Αν το γονίδιο δεν υπάρχει στο γράφο (λόγω sample size)
-                continue
-                
-            for j, gene2 in enumerate(genes):
-                if i < j:
-                    try:
-                        neighbors2 = set(self.bipartite_graph.neighbors(gene2))
-                        common_neighbors = neighbors1 & neighbors2
-                        
-                        if common_neighbors:
-                            # Resource Allocation formula: sum(1/degree(common_neighbor))
-                            weight = 0
-                            for c in common_neighbors:
-                                if degrees[c] > 0:  # Αποφυγή διαίρεσης με μηδέν
-                                    weight += 1 / degrees[c]
-                            
-                            if weight >= threshold:
-                                self.G.add_edge(gene1, gene2, weight=weight)
-                                self.edges_to_export.append((gene1, gene2, weight))
-                    except:
-                        # Αν το γονίδιο δεν υπάρχει στο γράφο
-                        pass
-                    
-                    processed_pairs += 1
-                    if processed_pairs % 10000 == 0:
-                        progress = 60 + int(40 * processed_pairs / total_pairs)
-                        if progress > last_progress:
-                            self.update_progress(progress)
-                            last_progress = progress
-        
+        neighbors_dict = {g: set(self.bipartite_graph.neighbors(g)) for g in genes}
+
+        n = len(genes)
+        self.log(f"  {n} genes, {n*(n-1)//2:,} pairs, {self.n_workers} worker(s)")
+
+        chunk = max(1, n // max(1, self.n_workers * 4))
+        batches = [
+            (i_start, min(i_start + chunk, n), genes, neighbors_dict, degrees, threshold)
+            for i_start in range(0, n, chunk)
+        ]
+
+        if self.n_workers > 1 and len(batches) > 1:
+            with Pool(processes=self.n_workers) as pool:
+                for batch_result in pool.imap_unordered(_resource_allocation_gene_batch, batches):
+                    for gene1, gene2, weight in batch_result:
+                        self.G.add_edge(gene1, gene2, weight=weight)
+                        self.edges_to_export.append((gene1, gene2, weight))
+        else:
+            for batch in batches:
+                for gene1, gene2, weight in _resource_allocation_gene_batch(batch):
+                    self.G.add_edge(gene1, gene2, weight=weight)
+                    self.edges_to_export.append((gene1, gene2, weight))
+
         self.log(f"Graph constructed with {len(self.G.nodes())} nodes and {len(self.G.edges())} edges")
         self.update_progress(100)
-        
+
         return self.G, self.edges_to_export
     
     def export_edges(self, output_filename, threshold):
@@ -586,7 +595,7 @@ def save_results(self, output_file, mode='gene', batch_size=10000):
     self.update_progress(100)
 
 # Συνάρτηση-βοηθός για εύκολη κλήση από το Flask
-def run_resource_allocation_similarity(input_file, output_dir, threshold=0.5, sample_size=1000, logger=None, progress_callback=None):
+def run_resource_allocation_similarity(input_file, output_dir, threshold=0.5, sample_size=1000, logger=None, progress_callback=None, n_workers=1):
     """
     Βοηθητική συνάρτηση για εκτέλεση της ανάλυσης Resource Allocation από Flask.
     
@@ -606,7 +615,7 @@ def run_resource_allocation_similarity(input_file, output_dir, threshold=0.5, sa
     output_filename = os.path.join(output_dir, f"resource_allocation_{task_id}.tsv")
     
     # Δημιουργία instance της κλάσης
-    analyzer = GeneSimilarityResourceAllocation(sample_size=sample_size, logger=logger)
+    analyzer = GeneSimilarityResourceAllocation(sample_size=sample_size, logger=logger, n_workers=n_workers)
     
     if progress_callback:
         analyzer.set_progress_callback(progress_callback)

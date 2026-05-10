@@ -237,6 +237,37 @@
             <input type="number" id="alphaInput" class="param-input" min="0" max="1" step="0.001" value="0.05" />
         </div>
 
+        <!-- Polya Filter Parameters -->
+        <div id="polyaPanel" class="global-threshold-panel" style="display: none;">
+            <div class="threshold-header">
+                <h4>Polya Filter Parameters</h4>
+            </div>
+            <div class="threshold-controls">
+                <div class="threshold-group">
+                    <label for="polyaAlpha">Significance level (α):</label>
+                    <input type="number" id="polyaAlpha" class="threshold-input" min="0.001" max="1" step="0.001" value="0.05" />
+                </div>
+                <div class="threshold-group">
+                    <label for="polyaA">Parameter a (1.0 = disparity filter, −1 = ML estimation):</label>
+                    <input type="number" id="polyaA" class="threshold-input" min="-1" max="15" step="0.1" value="1.0" />
+                </div>
+                <div class="threshold-group">
+                    <label for="polyaCorrection">Multiple testing correction:</label>
+                    <select id="polyaCorrection" class="threshold-select">
+                        <option value="fdr">FDR (Benjamini-Hochberg)</option>
+                        <option value="bonferroni">Bonferroni</option>
+                    </select>
+                </div>
+                <div class="threshold-group">
+                    <label for="polyaDirected">Network type:</label>
+                    <select id="polyaDirected" class="threshold-select">
+                        <option value="false">Undirected</option>
+                        <option value="true">Directed</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
     <!-- ========== ΕΔΩ ΜΠΑΙΝΕΙ ========== -->
     <!-- Global Threshold Filter Parameters -->
     <div id="globalThresholdPanel" class="global-threshold-panel" style="display: none;">
@@ -296,67 +327,6 @@
             <p id="downloadMessage"></p>
             <div class="download-buttons-row">
                 <button id="downloadBtn" class="panel-button-results download-button">Download Result</button>
-                <button id="compareNetworksInlineBtn" class="panel-button-results compare-btn" disabled style="opacity:0.5;">Compare Networks</button>
-                <button id="hideComparisonBtn" class="panel-button-results hide-btn" style="display: none;">✕ Hide Comparison</button>
-            </div>
-        </div>
-        
-        <!-- Network Visualization Section -->
-        <div id="visualizationSection" class="visualization-section" style="display: none;">
-            <div class="vis-header">
-                <div class="vis-title">
-                    <span class="vis-icon">⌗</span>
-                    <h3>Network Topology Comparison</h3>
-                </div>
-                <button id="closeVisSection" class="vis-close">×</button>
-            </div>
-            <div class="vis-body">
-                <div id="visLoading" class="vis-loading">
-                    <div class="vis-spinner"></div>
-                    <p>Generating network visualization...</p>
-                </div>
-                <div id="visContent" style="display: none;">
-                    <div class="comparison-wrapper">
-                        <div class="network-panel">
-                            <div class="panel-header before">
-                                <div class="panel-title">
-                                    <span class="panel-icon">⊡</span>
-                                    <span>Original Network</span>
-                                </div>
-                                <div class="panel-stats" id="statsBefore">-</div>
-                            </div>
-                            <div id="networkBefore" class="network-display"></div>
-                            <div class="panel-metrics" id="metricsBefore">
-                                <div class="metric-item">
-                                    <span class="metric-symbol">ω</span>
-                                    <span class="metric-value">-</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="vs-divider">
-                            <span>↯</span>
-                        </div>
-                        <div class="network-panel">
-                            <div class="panel-header after">
-                                <div class="panel-title">
-                                    <span class="panel-icon">⌗</span>
-                                    <span>Filtered Network</span>
-                                </div>
-                                <div class="panel-stats" id="statsAfter">-</div>
-                            </div>
-                            <div id="networkAfter" class="network-display"></div>
-                            <div class="panel-metrics" id="metricsAfter">
-                                <div class="metric-item">
-                                    <span class="metric-symbol">ω</span>
-                                    <span class="metric-value">-</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="comparison-footer">
-                        <div id="reductionInfo" class="reduction-badge"></div>
-                    </div>
-                </div>
             </div>
         </div>
 

@@ -50,7 +50,7 @@ Set up Nginx as a reverse proxy for production use.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `5000` | Port the server listens on |
+| `PORT` | `5050` | Port the server listens on |
 | `FLASK_ENV` | `production` | Set to `development` to enable debug mode |
 | `RENDER` | _(unset)_ | Set to any value when running on Render (adjusts tmp folder path) |
 
@@ -75,7 +75,7 @@ cd backend
 python app.py
 ```
 
-Open http://localhost:5000
+Open http://localhost:5050
 
 ---
 

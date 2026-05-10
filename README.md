@@ -14,7 +14,7 @@ Double-click `RUN_APP.bat`
 The script will:
 1. Detect or automatically install Python 3.11 (no admin rights needed)
 2. Create a virtual environment and install all dependencies (first run only)
-3. Open your browser at http://localhost:5000
+3. Open your browser at http://localhost:5050
 
 ### macOS / Linux
 ```bash
@@ -100,17 +100,17 @@ Gene1,Gene3,0.87
 - On Mac/Linux, make sure you ran `chmod +x run_app.sh`
 
 ### Browser doesn't open
-- Manually go to `http://localhost:5000`
+- Manually go to `http://localhost:5050`
 
-### Port 5000 already in use
+### Port 5050 already in use
 **Windows:**
 ```cmd
-netstat -ano | findstr :5000
+netstat -ano | findstr :5050
 taskkill /PID <PID> /F
 ```
 **Mac/Linux:**
 ```bash
-lsof -i :5000 && kill -9 <PID>
+lsof -i :5050 && kill -9 <PID>
 ```
 
 ### File upload fails

@@ -89,17 +89,23 @@ class GirvanNewmanOptimized:
         n = len(self.node_list)
         total_betweenness = defaultdict(float)
         all_nodes = list(range(n))
-        
+
         chunk_size = max(1, n // (self.num_processes * 4))
         node_chunks = [all_nodes[i:i + chunk_size] for i in range(0, n, chunk_size)]
-        
-        args = [(chunk, self.adjacency_dict, self.index_to_node) for chunk in node_chunks]
-        
-        with Pool(self.num_processes) as pool:
-            for result in pool.starmap(brandes_algorithm_worker, args):
-                for edge, val in result.items():
+
+        adj_snapshot = {k: set(v) for k, v in self.adjacency_dict.items()}
+        args = [(chunk, adj_snapshot, self.index_to_node) for chunk in node_chunks]
+
+        try:
+            with Pool(self.num_processes) as pool:
+                for result in pool.starmap(brandes_algorithm_worker, args):
+                    for edge, val in result.items():
+                        total_betweenness[edge] += val
+        except Exception:
+            for arg in args:
+                for edge, val in brandes_algorithm_worker(*arg).items():
                     total_betweenness[edge] += val
-        
+
         for edge in total_betweenness:
             total_betweenness[edge] = round(total_betweenness[edge] / 2, 6)
         return total_betweenness
@@ -149,7 +155,7 @@ class GirvanNewmanOptimized:
         best_graph = self.graph.copy()
         iteration = 0
         no_improvement_count = 0
-        total_iterations = max_iterations if max_iterations else 20
+        total_iterations = max_iterations if max_iterations else 10
         current_communities: List[Set] = []
 
         while iteration < total_iterations and self.graph.number_of_edges() > 0:
@@ -281,6 +287,10 @@ class GirvanNewmanOptimized:
 # ------------------------------------------------------------------
 # Graph loader — positional access, auto-detect separator, tqdm
 # ------------------------------------------------------------------
+_HEADER_KEYWORDS = {'source', 'target', 'node', 'gene', 'from', 'to', 'src', 'dst',
+                    'protein', 'id', 'name', 'weight', 'score', 'edge'}
+
+
 def _detect_separator_from_file(filepath: str) -> str:
     with open(filepath, 'r', encoding='utf-8') as f:
         line = f.readline()
@@ -288,6 +298,17 @@ def _detect_separator_from_file(filepath: str) -> str:
     if ',' in line:   return ','
     if ';' in line:   return ';'
     return r'\s+'
+
+
+def _has_header(filepath: str, sep: str) -> bool:
+    with open(filepath, 'r', encoding='utf-8') as f:
+        line = f.readline().strip()
+    if not line:
+        return False
+    parts = line.split(sep if sep != r'\s+' else None)
+    if len(parts) < 2:
+        return False
+    return all(p.strip().lower() in _HEADER_KEYWORDS for p in parts[:2])
 
 
 def _count_file_lines(filepath: str) -> int:
@@ -306,15 +327,16 @@ def load_graph_from_file(filepath: str, max_lines: int = 500,
     """
     G   = nx.Graph()
     sep = _detect_separator_from_file(filepath)
-    total_lines  = _count_file_lines(filepath)
+    skip = 1 if _has_header(filepath, sep) else 0
+    total_lines  = _count_file_lines(filepath) - skip
     total_chunks = max(1, total_lines // chunksize)
 
     if logger:
-        logger.info(f"Loading graph: sep={repr(sep)}, max_lines={max_lines}")
+        logger.info(f"Loading graph: sep={repr(sep)}, max_lines={max_lines}, skip_header={bool(skip)}")
 
     chunk_reader = pd.read_csv(
         filepath, sep=sep, header=None,
-        chunksize=chunksize, dtype=str,
+        skiprows=skip, chunksize=chunksize, dtype=str,
         engine='python', skipinitialspace=True
     )
 

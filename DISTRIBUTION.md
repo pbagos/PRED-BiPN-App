@@ -57,13 +57,13 @@ When a user runs `RUN_APP.bat` on a fresh machine:
 1. Extract `PRED-BiPN-App.zip`
 2. Double-click `RUN_APP.bat`
 3. On first run, wait a few minutes while dependencies install
-4. Browser opens automatically at http://localhost:5000
+4. Browser opens automatically at http://localhost:5050
 
 ### Mac / Linux
 1. Extract `PRED-BiPN-App.zip`
 2. Open Terminal in the folder
 3. Run: `chmod +x run_app.sh && ./run_app.sh`
-4. Browser opens at http://localhost:5000
+4. Browser opens at http://localhost:5050
 
 ---
 
@@ -73,7 +73,7 @@ When a user runs `RUN_APP.bat` on a fresh machine:
 |---|---|
 | "Python not found" error | Script installs it automatically; if it fails, install Python 3.11 from https://www.python.org/downloads/ and re-run |
 | App worked on one machine but not another | Delete the `.venv` folder and re-run the launcher — it rebuilds for the current machine |
-| Port 5000 in use | Close the other app using port 5000 and try again |
+| Port 5050 in use | Close the other app using port 5050 and try again |
 | Slow first run | Normal — dependencies (~500MB) are installing once |
 
 ---

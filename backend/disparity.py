@@ -4,8 +4,30 @@ import warnings
 import os
 from tqdm import tqdm
 import psutil
+from multiprocessing import Pool, cpu_count
 
 warnings.filterwarnings("ignore")
+
+
+def _filter_rows_batch(args):
+    """Module-level worker: filter a batch of (u, v, weight) rows."""
+    rows, strength, degree, alpha_val = args
+    results = []
+    for u, v, weight in rows:
+        su = strength.get(u, 0)
+        sv = strength.get(v, 0)
+        if su == 0 or sv == 0:
+            continue
+        ku = degree.get(u, 1)
+        kv = degree.get(v, 1)
+        pij_u = weight / su
+        aij_u = beta.sf(pij_u, 1, ku - 1) if ku > 1 else 1.0
+        pij_v = weight / sv
+        aij_v = beta.sf(pij_v, 1, kv - 1) if kv > 1 else 1.0
+        aij = min(aij_u, aij_v)
+        if aij < alpha_val:
+            results.append((u, v, weight, aij))
+    return results
 
 
 class DisparityFilter:
@@ -15,10 +37,11 @@ class DisparityFilter:
     Column access is always positional (iloc[0], iloc[1], iloc[2]).
     """
 
-    def __init__(self, alpha=0.05, chunksize=100000):
+    def __init__(self, alpha=0.05, chunksize=100000, n_workers=1):
         self.alpha = alpha
         self.chunksize = chunksize
         self.beta_cache = {}
+        self.n_workers = n_workers
 
     def _detect_separator(self, filename):
         with open(filename, 'r') as f:
@@ -102,29 +125,51 @@ class DisparityFilter:
         if progress_callback:
             progress_callback(50)
 
-        # Pass 2: filter edges
-        print("  Applying disparity filter...")
+        # Pass 2: load all edges then filter (parallel-friendly)
+        print(f"  Applying disparity filter ({self.n_workers} worker(s))...")
         with open(input_file) as f:
             total_rows = sum(1 for line in f) - 1
 
+        # Read all edge rows into memory for parallel processing
+        all_rows = []
+        chunk_reader = pd.read_csv(input_file, sep=sep, header=0,
+                                   chunksize=self.chunksize)
+        for chunk in tqdm(chunk_reader, total=total_rows / self.chunksize,
+                          desc="Reading edges"):
+            chunk.iloc[:, 2] = pd.to_numeric(chunk.iloc[:, 2], errors='coerce')
+            chunk = chunk.dropna(subset=[chunk.columns[2]])
+            for _, row in chunk.iterrows():
+                u = str(row.iloc[0]).strip()
+                v = str(row.iloc[1]).strip()
+                w = float(row.iloc[2])
+                if u and v and u != 'nan' and v != 'nan':
+                    all_rows.append((u, v, w))
+
+        if psutil.virtual_memory().percent > 90:
+            warnings.warn("High memory usage! Consider reducing chunksize.")
+
+        # Split into batches and filter in parallel
+        batch_size = max(1000, len(all_rows) // max(1, self.n_workers * 4))
+        batches = [
+            (all_rows[k:k + batch_size], strength, degree, self.alpha)
+            for k in range(0, len(all_rows), batch_size)
+        ]
+        print(f"  Processing {len(all_rows):,} edges in {len(batches)} batches")
+
         with open(output_file, 'w') as f_out:
             f_out.write("source\ttarget\tweight\talpha\n")
-
-            chunk_reader = pd.read_csv(input_file, sep=sep, header=0,
-                                       chunksize=self.chunksize)
-
-            for chunk in tqdm(chunk_reader, total=total_rows / self.chunksize,
-                              desc="Filtering edges"):
-                chunk.iloc[:, 2] = pd.to_numeric(chunk.iloc[:, 2], errors='coerce')
-                chunk = chunk.dropna(subset=[chunk.columns[2]])
-
-                results = self._process_chunk(chunk, strength, degree)
-
-                for u, v, weight, a in results:
-                    f_out.write(f"{u}\t{v}\t{weight}\t{a:.6f}\n")
-
-                if psutil.virtual_memory().percent > 90:
-                    warnings.warn("High memory usage! Consider reducing chunksize.")
+            if self.n_workers > 1 and len(batches) > 1:
+                with Pool(processes=self.n_workers) as pool:
+                    for batch_result in tqdm(
+                        pool.imap(_filter_rows_batch, batches),
+                        total=len(batches), desc="Filtering edges"
+                    ):
+                        for u, v, weight, a in batch_result:
+                            f_out.write(f"{u}\t{v}\t{weight}\t{a:.6f}\n")
+            else:
+                for batch in tqdm(batches, desc="Filtering edges"):
+                    for u, v, weight, a in _filter_rows_batch(batch):
+                        f_out.write(f"{u}\t{v}\t{weight}\t{a:.6f}\n")
 
         if progress_callback:
             progress_callback(100)
@@ -133,9 +178,9 @@ class DisparityFilter:
 
 
 def run_disparity_filter(input_file, output_file, alpha=0.05,
-                         chunksize=100000, progress_callback=None):
+                         chunksize=100000, n_workers=1, progress_callback=None):
     """Compatibility function for Flask server."""
-    df = DisparityFilter(alpha=alpha, chunksize=chunksize)
+    df = DisparityFilter(alpha=alpha, chunksize=chunksize, n_workers=n_workers)
     df.run(input_file, output_file, progress_callback=progress_callback)
 
 

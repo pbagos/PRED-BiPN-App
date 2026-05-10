@@ -1,6 +1,7 @@
 """
 Polya Filter - Αριθμητικά Σταθερή Υλοποίηση για Εξαγωγή Backbone
 Με αυτόματη ανίχνευση, POSITIONAL ACCESS και CSV output με source, target
+(Includes fixes for FDR multiple testing and directed graph null models)
 """
 
 import numpy as np
@@ -15,6 +16,75 @@ from tqdm import tqdm
 import gc
 import logging
 from scipy.optimize import minimize
+from multiprocessing import Pool, cpu_count
+
+
+# ---------------------------------------------------------------------------
+# Module-level functions — must live outside the class to be picklable for
+# multiprocessing workers.
+# ---------------------------------------------------------------------------
+
+def _log_polya_pmf_mp(w: int, k: int, s: int, a: float) -> float:
+    if w < 0 or w > s or s <= 0 or k <= 1 or a <= 0:
+        return -np.inf
+    alpha = 1.0 / a
+    beta_val = (k - 1.0) / a
+    try:
+        log_binom = sp.gammaln(s + 1) - sp.gammaln(w + 1) - sp.gammaln(s - w + 1)
+        log_beta_ratio = sp.betaln(w + alpha, s - w + beta_val) - sp.betaln(alpha, beta_val)
+        return log_binom + log_beta_ratio
+    except ValueError:
+        return -np.inf
+
+
+def _polya_pvalue_mp(w: float, k: int, s: float, a: float, apr_lvl: float = 10) -> float:
+    if k == 1:
+        return 1.0
+    w_int = int(round(w))
+    s_int = int(round(s))
+    if a == 0:
+        return float(scipy.stats.binom.sf(w_int - 1, s_int, 1.0 / k))
+    if w_int <= 0:
+        return 1.0
+    if w_int > s_int:
+        return 0.0
+    L = apr_lvl
+    idx1 = (s - w) >= L * ((k - 1) / a + 1)
+    idx2 = w >= L * max(1 / a, 1)
+    idx3 = s >= L * max(k / a, 1)
+    idx4 = k >= L * (a - 1 + 1e-20)
+    if L > 0 and idx1 and idx2 and idx3 and idx4:
+        p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
+        return float(min(max(p, 0.0), 1.0))
+    log_probs = []
+    for x in range(w_int, s_int + 1):
+        lp = _log_polya_pmf_mp(x, k, s_int, a)
+        if lp > -np.inf:
+            log_probs.append(lp)
+    if not log_probs:
+        return 0.0
+    log_max = max(log_probs)
+    s_exp = sum(np.exp(lp - log_max) for lp in log_probs)
+    return float(min(max(np.exp(log_max + np.log(s_exp)), 0.0), 1.0))
+
+
+def _compute_edge_batch_mp(batch):
+    """Compute p-values for a batch of edges."""
+    results = []
+    # FIX: Added 'directed' to the batch unpack
+    for i, j, w, node_i, node_j, a, apr_lvl, directed in batch:
+        k1, s1 = node_i
+        p1 = _polya_pvalue_mp(w, k1, s1, a, apr_lvl)
+        
+        # FIX: Only compute p2 if undirected and node_j exists
+        if not directed and node_j is not None:
+            k2, s2 = node_j
+            p2 = _polya_pvalue_mp(w, k2, s2, a, apr_lvl)
+        else:
+            p2 = 1.0 # Ignored in directed mode
+            
+        results.append((i, j, w, p1, p2))
+    return results
 
 
 class PolyaFilter:
@@ -23,7 +93,8 @@ class PolyaFilter:
     Χρησιμοποιεί positional access (iloc[0], iloc[1], iloc[2]) χωρίς προκαθορισμένα ονόματα στηλών.
     """
     
-    def __init__(self, significance_level: float = 0.05, method: str = 'fdr', logger: Optional[logging.Logger] = None):
+    def __init__(self, significance_level: float = 0.05, method: str = 'fdr',
+                 logger: Optional[logging.Logger] = None, n_workers: Optional[int] = None):
         """
         Αρχικοποίηση του Polya Filter.
         
@@ -38,12 +109,13 @@ class PolyaFilter:
         self.adj_dict = {}
         self.node_props = {}
         self.stats = {}
-        
+        self.n_workers = n_workers if n_workers is not None else 1
+
         # Column detection info
         self.detected_sep = None
         self.has_header = None
         self.num_columns = None
-        
+
         if self.method not in ['bonferroni', 'fdr']:
             raise ValueError("Η μέθοδος διόρθωσης πρέπει να είναι 'bonferroni' ή 'fdr'")
     
@@ -104,7 +176,7 @@ class PolyaFilter:
             self.has_header = False
             return False
             
-    def get_ML_estimate(self) -> float:
+    def get_ML_estimate(self, directed: bool = False) -> float:
         """
         Υπολογίζει την Maximum Likelihood εκτίμηση της παραμέτρου a,
         οδηγώντας σε ultra-sparse backbones προσαρμοσμένα στην ετερογένεια του δικτύου.
@@ -113,11 +185,18 @@ class PolyaFilter:
         k_list = []
         s_list = []
         for (u, v), w in self.adj_dict.items():
-            k_u, s_u = self.node_props[u]
-            k_v, s_v = self.node_props[v]
-            w_list.extend([w, w])
-            k_list.extend([k_u, k_v])
-            s_list.extend([s_u, s_v])
+            # FIX: Check if nodes exist in node_props to prevent directed-graph KeyErrors
+            if u in self.node_props:
+                k_u, s_u = self.node_props[u]
+                w_list.append(w)
+                k_list.append(k_u)
+                s_list.append(s_u)
+            
+            if not directed and v in self.node_props:
+                k_v, s_v = self.node_props[v]
+                w_list.append(w)
+                k_list.append(k_v)
+                s_list.append(s_v)
             
         w_arr = np.array(w_list)
         k_arr = np.array(k_list)
@@ -146,8 +225,17 @@ class PolyaFilter:
             if np.isinf(val) or np.isnan(val): return 1e10
             return val
 
-        res = minimize(nll, x0=[0.5], bounds=[(1e-5, 15)], method='L-BFGS-B')
-        a_best = res.x[0]
+        best_val, a_best = np.inf, 1.0
+        for x0 in [0.1, 0.5, 1.0, 2.0, 3.0]:
+            res = minimize(nll, x0=[x0], bounds=[(1e-5, 5.0)], method='L-BFGS-B')
+            if res.fun < best_val:
+                best_val = res.fun
+                a_best = res.x[0]
+
+        if a_best >= 4.9:
+            self._log_message("  Warning: ML estimate hit upper bound. Network may be too heterogeneous. Falling back to a=1.0.", 'warning')
+            a_best = 1.0
+
         self._log_message(f"  Estimation ended, a = {a_best:.6f}")
         return float(a_best)
     
@@ -192,21 +280,16 @@ class PolyaFilter:
         if w_int > s_int:
             return 0.0
             
-        # Asymptotic Approximation Check (Eq. 6)
-        if apr_lvl > 0:
-            L = apr_lvl
-            idx1 = (s - w) >= L * ((k - 1) / a + 1)
-            idx2 = w >= L * max(1 / a, 1)
-            idx3 = s >= L * max(k / a, 1)
-            idx4 = k >= L * (a - 1 + 1e-20)
-            
-            if idx1 and idx2 and idx3 and idx4:
-                term1 = 1.0 / sp.gamma(1.0 / a)
-                term2 = (1.0 - w / s) ** ((k - 1) / a)
-                term3 = (w * k / (s * a)) ** (1.0 / a - 1.0)
-                return float(min(max(term1 * term2 * term3, 0.0), 1.0))
-        
-        # Exact Log-Sum-Exp Loop
+        L = apr_lvl
+        idx1 = (s - w) >= L * ((k - 1) / a + 1)
+        idx2 = w >= L * max(1 / a, 1)
+        idx3 = s >= L * max(k / a, 1)
+        idx4 = k >= L * (a - 1 + 1e-20)
+
+        if L > 0 and idx1 and idx2 and idx3 and idx4:
+            p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
+            return float(min(max(p, 0.0), 1.0))
+
         log_probs = []
         for x in range(w_int, s_int + 1):
             log_prob = self._log_polya_pmf(x, k, s_int, a)
@@ -350,7 +433,7 @@ class PolyaFilter:
             self._log_message("\n" + "="*60)
             self._log_message("ESTIMATING PARAMETER 'a' VIA MAXIMUM LIKELIHOOD")
             self._log_message("="*60)
-            a = self.get_ML_estimate()
+            a = self.get_ML_estimate(directed=directed) # FIX: pass directed flag
         
         # Check if approximation level should be used
         has_non_int = any(w % 1 != 0 for w in self.adj_dict.values())
@@ -360,25 +443,54 @@ class PolyaFilter:
         
         p_values = []
         edges_data = []
-        
+
         self._log_message("\n" + "="*60)
         self._log_message(f"CALCULATING P-VALUES (L = {num_tests:,})")
         self._log_message(f"  Parameter a = {a}")
         self._log_message(f"  Approximation level = {apr_lvl}")
+        self._log_message(f"  Workers = {self.n_workers}")
         self._log_message("="*60)
-        
-        for (i, j), weight in tqdm(self.adj_dict.items(), desc="  Computing p-values"):
-            if i not in self.node_props or j not in self.node_props: 
-                continue
-                
-            node_i = self.node_props[i]
-            node_j = self.node_props[j]
-            
-            p1, p2 = self.compute_link_significance(weight, node_i, node_j, a, apr_lvl)
-            
-            p_values.append(min(p1, p2))
-            edges_data.append(((i, j), weight, p1, p2))
-            
+
+        # FIX: Safe edge building for directed graphs
+        edge_items = []
+        for (i, j), w in self.adj_dict.items():
+            if directed:
+                if i in self.node_props:
+                    edge_items.append((i, j, w, self.node_props[i], None, a, apr_lvl, directed))
+            else:
+                if i in self.node_props and j in self.node_props:
+                    edge_items.append((i, j, w, self.node_props[i], self.node_props[j], a, apr_lvl, directed))
+
+        if self.n_workers > 1 and len(edge_items) > 500:
+            batch_size = max(100, len(edge_items) // (self.n_workers * 4))
+            batches = [edge_items[k:k + batch_size] for k in range(0, len(edge_items), batch_size)]
+            self._log_message(f"  Parallel batches: {len(batches)} x ~{batch_size} edges")
+            with Pool(processes=self.n_workers) as pool:
+                for batch_result in tqdm(
+                    pool.imap(_compute_edge_batch_mp, batches),
+                    total=len(batches), desc="  Computing p-values"
+                ):
+                    for i, j, weight, p1, p2 in batch_result:
+                        # FIX: Store all p-values properly
+                        if directed:
+                            p_values.append(p1)
+                        else:
+                            p_values.extend([p1, p2])
+                        edges_data.append(((i, j), weight, p1, p2))
+        else:
+            for i, j, w, node_i, node_j, _a, _apr, _dir in tqdm(edge_items, desc="  Computing p-values"):
+                k1, s1 = node_i
+                p1 = _polya_pvalue_mp(w, k1, s1, _a, _apr)
+                # FIX: Handle directed/undirected safely
+                if not _dir:
+                    k2, s2 = node_j
+                    p2 = _polya_pvalue_mp(w, k2, s2, _a, _apr)
+                    p_values.extend([p1, p2])
+                else:
+                    p2 = 1.0
+                    p_values.append(p1)
+                edges_data.append(((i, j), w, p1, p2))
+
         self.stats['total_p_values'] = len(p_values)
         
         self._log_message("\n" + "="*60)
@@ -389,28 +501,37 @@ class PolyaFilter:
         if not p_values:
             return []
 
+        # FIX: apply the threshold to the entire collected array of p_values
         if self.method == 'bonferroni':
-            thresh = self.alpha_u / num_tests
+            thresh = self.alpha_u / len(p_values)
             rejected = np.array(p_values) < thresh
-            self._log_message(f"  Bonferroni threshold (α_u/L): {thresh:.6e}")
+            self._log_message(f"  Bonferroni threshold: {thresh:.6e}")
             self._log_message(f"  Significant edges: {sum(rejected):,}")
             self.stats['threshold'] = thresh
             
         elif self.method == 'fdr':
-            if not p_values: 
-                return []
             rejected, p_corrected, _, _ = multipletests(p_values, alpha=self.alpha_u, method='fdr_bh')
             self._log_message(f"  FDR (Benjamini/Hochberg) applied.")
             self._log_message(f"  Significant edges: {sum(rejected):,}")
             self.stats['significant_fdr'] = int(sum(rejected))
         
         backbone_edges = []
-        for idx, (edge, weight, p1, p2) in enumerate(edges_data):
-            if rejected[idx]:
-                i, j = edge
-                r_ratio = self.compute_r_ratio(weight, self.node_props[i], self.node_props[j])
-                min_p = min(p1, p2)
-                backbone_edges.append((i, j, weight, min_p, p1, p2, r_ratio))
+        
+        # FIX: Reconstruct the edges based on the true number of evaluated p_values
+        if directed:
+            for idx, (edge, weight, p1, p2) in enumerate(edges_data):
+                if rejected[idx]:
+                    i, j = edge
+                    r_ratio = self.compute_r_ratio(weight, self.node_props[i], (0, 0)) # No target stats for directed
+                    backbone_edges.append((i, j, weight, p1, p1, p2, r_ratio))
+        else:
+            # Reshape flat array back into pairs
+            rejected_pairs = rejected.reshape(-1, 2)
+            for idx, (edge, weight, p1, p2) in enumerate(edges_data):
+                if rejected_pairs[idx][0] or rejected_pairs[idx][1]:
+                    i, j = edge
+                    r_ratio = self.compute_r_ratio(weight, self.node_props[i], self.node_props[j])
+                    backbone_edges.append((i, j, weight, min(p1, p2), p1, p2, r_ratio))
         
         self.stats['backbone_edges'] = len(backbone_edges)
         self.stats['retained_percentage'] = (len(backbone_edges) / num_links) * 100 if num_links > 0 else 0
@@ -439,12 +560,19 @@ class PolyaFilter:
         """
         Αποθήκευση αποτελεσμάτων σε CSV αρχείο με στήλες: source, target, weight, p_value.
         """
-        if not backbone_edges:
-            self._log_message("  No results to save.")
-            return
-        
         try:
             os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
+
+            if not backbone_edges:
+                self._log_message("  No results to save.")
+                # Write empty file with headers so the download endpoint can serve it
+                pd.DataFrame(columns=['source', 'target', 'weight', 'p_value']).to_csv(
+                    output_file, index=False, sep='\t'
+                )
+                stats_file = output_file.replace('.tsv', '_stats.txt')
+                self.save_summary_stats(stats_file)
+                self.stats['output_file'] = output_file
+                return
             
             self._log_message("\n" + "="*60)
             self._log_message("SAVING RESULTS")
@@ -599,13 +727,15 @@ class PolyaFilter:
             }
 
 
-def create_polya_filter(significance_level: float = 0.05, 
-                        method: str = 'fdr', 
-                        logger: Optional[logging.Logger] = None) -> PolyaFilter:
+def create_polya_filter(significance_level: float = 0.05,
+                        method: str = 'fdr',
+                        logger: Optional[logging.Logger] = None,
+                        n_workers: Optional[int] = None) -> PolyaFilter:
     return PolyaFilter(
         significance_level=significance_level,
         method=method,
-        logger=logger
+        logger=logger,
+        n_workers=n_workers,
     )
 
 
