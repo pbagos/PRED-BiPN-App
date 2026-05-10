@@ -48,6 +48,12 @@ def _polya_pvalue_mp(w: float, k: int, s: float, a: float, apr_lvl: float = 10) 
         return 1.0
     if w_int > s_int:
         return 0.0
+    # apr_lvl=-1: non-integer weights — paper says always use betainc (Eq. 6)
+    if apr_lvl < 0:
+        if s > 0:
+            p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
+            return float(min(max(p, 0.0), 1.0))
+        return 1.0
     L = apr_lvl
     idx1 = (s - w) >= L * ((k - 1) / a + 1)
     idx2 = w >= L * max(1 / a, 1)
@@ -279,7 +285,14 @@ class PolyaFilter:
             return 1.0
         if w_int > s_int:
             return 0.0
-            
+
+        # apr_lvl=-1: non-integer weights — paper says always use betainc (Eq. 6)
+        if apr_lvl < 0:
+            if s > 0:
+                p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
+                return float(min(max(p, 0.0), 1.0))
+            return 1.0
+
         L = apr_lvl
         idx1 = (s - w) >= L * ((k - 1) / a + 1)
         idx2 = w >= L * max(1 / a, 1)
@@ -437,9 +450,12 @@ class PolyaFilter:
         
         # Check if approximation level should be used
         has_non_int = any(w % 1 != 0 for w in self.adj_dict.values())
-        apr_lvl = 0 if has_non_int else 10
+        # Paper (Methods, "Networks with non-integer weights"): Eq. (1) cannot assign
+        # p-values to non-integer weights; use Eq. (6) (betainc approximation) instead.
+        # For integer weights, use exact sum unless approximation conditions are met.
+        apr_lvl = -1 if has_non_int else 10
         if has_non_int:
-            self._log_message("  Non-integer weights detected. Asymptotic approximation disabled (apr_lvl=0).")
+            self._log_message("  Non-integer weights detected. Forcing betainc approximation (Eq. 6 per paper).")
         
         p_values = []
         edges_data = []

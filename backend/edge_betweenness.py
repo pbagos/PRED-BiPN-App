@@ -93,7 +93,7 @@ class GirvanNewmanOptimized:
         chunk_size = max(1, n // (self.num_processes * 4))
         node_chunks = [all_nodes[i:i + chunk_size] for i in range(0, n, chunk_size)]
 
-        adj_snapshot = {k: set(v) for k, v in self.adjacency_dict.items()}
+        adj_snapshot = defaultdict(set, {k: set(v) for k, v in self.adjacency_dict.items()})
         args = [(chunk, adj_snapshot, self.index_to_node) for chunk in node_chunks]
 
         try:
@@ -155,7 +155,7 @@ class GirvanNewmanOptimized:
         best_graph = self.graph.copy()
         iteration = 0
         no_improvement_count = 0
-        total_iterations = max_iterations if max_iterations else 10
+        total_iterations = max_iterations if max_iterations else self.graph.number_of_edges()
         current_communities: List[Set] = []
 
         while iteration < total_iterations and self.graph.number_of_edges() > 0:
@@ -246,7 +246,7 @@ class GirvanNewmanOptimized:
     def save_communities_to_file(self, communities: List[Set], filename: str):
         """
         Saves community membership as CSV.
-        Columns: source (node), target (community_id), weight (community_size)
+        Columns: source (node), size (community_size), community (community_id)
         Comment lines at the top summarise the run.
         """
         try:
@@ -257,11 +257,11 @@ class GirvanNewmanOptimized:
                 f.write(f"# Total communities: {len(communities)}\n")
                 f.write(f"# Execution time: {self.runtime:.2f} seconds\n")
                 f.write(f"# Maximum modularity: {max_mod:.6f}\n#\n")
-                f.write("source\ttarget\tweight\n")
+                f.write("source\tsize\tcommunity\n")
                 for comm_id, comm in enumerate(communities, start=1):
                     comm_size = len(comm)
                     for node in sorted(comm):
-                        f.write(f"{node}\t{comm_id}\t{comm_size}\n")
+                        f.write(f"{node}\t{comm_size}\t{comm_id}\n")
         except Exception as e:
             self._log(f"Save error: {e}")
             

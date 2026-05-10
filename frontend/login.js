@@ -1,7 +1,7 @@
 // ============================
 // Global Variables
 // ============================
-const API_BASE = 'http://127.0.0.1:5050';
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:5050`;
 
 const ALPHA_METHODS = [
     'disparity filter',
@@ -1229,6 +1229,9 @@ continueBtn.addEventListener('click', async () => {
 
             if (files.result_file) {
                 resultFiles.push({name: files.result_file, desc: `${methodName} Result`});
+                if (files.communities_file) {
+                    resultFiles.push({name: files.communities_file, desc: `${methodName} Communities`});
+                }
             } else if (files.result) {
                 resultFiles.push({name: files.result, desc: `${methodName} Result`});
             } else if (files.node1_file && files.node2_file) {

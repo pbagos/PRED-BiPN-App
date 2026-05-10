@@ -22,6 +22,7 @@ import base64
 #Methods
 from disparity import run_disparity_filter
 from one_mode_projection_sparse import run_one_mode_projection
+from weighted_projection import run_one_mode_projection as run_weighted_projection
 from doubly_stochastic import TrueMultiscaleBackbone
 from hierarchical_backbone import HierarchicalBackboneExtractor
 from high_salience_skeleton import HighSalienceSkeleton, run_hss
@@ -35,7 +36,6 @@ from odds import OddsRatioCalculator
 from polya import PolyaFilter, create_polya_filter
 # Στην αρχή του αρχείου, με τα άλλα imports
 from cosine import GeneSimilarityCosine, run_gene_similarity_cosine
-from one_mode_projection_sparse import run_one_mode_projection
 from adamic_adar import run_adamic_adar_similarity
 from resource_allocation import run_resource_allocation_similarity
 from jaccard import run_jaccard_analysis, JaccardSimilarityAnalyzer
@@ -499,9 +499,9 @@ def _execute_processing(data, task_id):
 
             elif method.lower() == "simple weighted projection":
                 app.logger.info(f"Starting Simple Weighted Projection")
-                node1_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_gene_edges.tsv')
-                node2_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_disease_edges.tsv')
-                run_one_mode_projection(input_path, node1_output, node2_output)
+                node1_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1_edges.tsv')
+                node2_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2_edges.tsv')
+                run_weighted_projection(input_path, node1_output, node2_output)
                 app.logger.info("One mode projection completed")
                 if os.path.exists(node1_output) and os.path.exists(node2_output):
                     try:
