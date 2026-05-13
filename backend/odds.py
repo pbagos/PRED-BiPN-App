@@ -6,7 +6,7 @@ Uses positional column access: iloc[0]=source, iloc[1]=target, iloc[2]=weight
 
 import pandas as pd
 import numpy as np
-from scipy.stats import chi2
+from scipy.stats import chi2, fisher_exact
 import os
 import logging
 from collections import defaultdict
@@ -56,40 +56,40 @@ class OddsRatioCalculator:
         return sep
     
     def has_header(self, file_path, sep):
-        """Ελέγχει αν η πρώτη γραμμή είναι header"""
-        with open(file_path, 'r') as f:
+        """First line is a header only if BOTH columns 0 and 1 are exact
+        header keywords. Substring matching incorrectly flagged real entity
+        names like 'ALZHEIMER'S_DISEASE' (contains 'disease') as headers."""
+        kw = {'source', 'target', 'from', 'to', 'node', 'gene', 'src', 'dst',
+              'id', 'name', 'weight', 'score', 'reference', 'disease',
+              'col1', 'col2', 'edge'}
+        with open(file_path, 'r', encoding='utf-8') as f:
             first_line = f.readline().strip()
-        
+            second_line = f.readline().strip()
+        if not first_line:
+            return False
         parts = first_line.split(sep)
-        
-        # Αν η πρώτη γραμμή περιέχει κείμενο που μοιάζει με header
-        header_keywords = ['source', 'target', 'from', 'to', 'node', 'gene', 
-                          'weight', 'value', 'score', 'name', 'id', 'disease',
-                          'reference', 'col1', 'col2']
-        
-        for part in parts:
-            part_lower = part.lower()
-            if any(keyword in part_lower for keyword in header_keywords):
-                return True
-        
-        # Έλεγχος αν η δεύτερη γραμμή έχει αριθμούς
-        try:
-            f.seek(0)
-            second_line = f.readline().strip()  # Διάβασε ξανά την πρώτη
-            second_line = f.readline().strip()  # Διάβασε τη δεύτερη
-            
-            if second_line:
-                second_parts = second_line.split(sep)
-                # Αν η δεύτερη γραμμή έχει αριθμητικά βάρη, πιθανά η πρώτη είναι header
-                if len(second_parts) > 2:
-                    try:
-                        float(second_parts[2])
-                        return True
-                    except:
-                        pass
-        except:
-            pass
-        
+        if len(parts) < 2:
+            return False
+        col0_is_kw = parts[0].strip().lower() in kw
+        col1_is_kw = parts[1].strip().lower() in kw
+        if col0_is_kw and col1_is_kw:
+            return True
+        # Fallback: if line 1 col-2 is non-numeric but line 2 col-2 is numeric,
+        # line 1 is almost certainly a header.
+        if second_line:
+            p1 = parts[2].strip() if len(parts) > 2 else ''
+            p2 = second_line.split(sep)
+            p2_third = p2[2].strip() if len(p2) > 2 else ''
+            try:
+                float(p2_third)
+                # line 2 col-2 parses; if line 1 col-2 doesn't, header
+                try:
+                    float(p1) if p1 else None
+                    return False
+                except ValueError:
+                    return True
+            except ValueError:
+                pass
         return False
     
     def load_data_flexible(self, input_file, reference_column='col1', 
@@ -180,11 +180,15 @@ class OddsRatioCalculator:
                     if not u or not v or u == 'nan' or v == 'nan':
                         continue
                     
-                    # Store reference -> nodes mapping
+                    # Store reference -> nodes mapping.
+                    # Only count v once per unique reference u, otherwise
+                    # duplicate (u,v) rows inflate node_counts and break the
+                    # 2x2 table arithmetic (b = node_counts[n1] - a, etc.).
                     references.add(u)
-                    self.reference_to_nodes[u].add(v)
-                    self.node_counts[v] += 1
-                    
+                    if v not in self.reference_to_nodes[u]:
+                        self.reference_to_nodes[u].add(v)
+                        self.node_counts[v] += 1
+
                     processed_rows += 1
                 
                 # Update progress if callback provided
@@ -347,17 +351,15 @@ class OddsRatioCalculator:
                         # Write to CSV if output_file provided
                         if f_out:
                             f_out.write(f"{node1}\t{node2}\t{a}\t{or_value:.6f}\t{ci_lower:.6f}\t{ci_upper:.6f}\t{p_value:.6e}\t{a}\t{self.node_counts[node1]}\t{self.node_counts[node2]}\n")
-                            
-                            processed += 1
-                            if processed % buffer_size == 0:
-                                f_out.flush()
-                                logger.info(f"Processed {processed} pairs, skipped {skipped}")
-                        
+
                         # Keep in memory if needed
                         elif max_pairs_to_return and len(results_buffer) < max_pairs_to_return:
                             results_buffer.append(result_row)
-                        
+
                         processed += 1
+                        if f_out and processed % buffer_size == 0:
+                            f_out.flush()
+                            logger.info(f"Processed {processed} pairs, skipped {skipped}")
                         
                     except Exception as e:
                         logger.warning(f"Error calculating for pair {node1}-{node2}: {e}")
@@ -459,8 +461,9 @@ class OddsRatioCalculator:
         }
         
         try:
-            # Read CSV file in chunks
-            for chunk in pd.read_csv(file_path, chunksize=10000):
+            # Read file in chunks — output is TSV
+            sep = '\t' if str(file_path).endswith('.tsv') else ','
+            for chunk in pd.read_csv(file_path, sep=sep, chunksize=10000):
                 stats['total_pairs'] += len(chunk)
                 stats['significant_pairs'] += sum((chunk['p_value'] < p_threshold) & 
                                                  (chunk['odds_ratio'] >= or_threshold))
@@ -491,22 +494,203 @@ class OddsRatioCalculator:
     
     def _get_top_pairs_from_file(self, file_path, n=100):
         """
-        Get top n pairs by odds ratio from CSV file.
+        Stream the output CSV in chunks, keep the top-n by odds_ratio in a heap.
+        Avoids loading the entire file into memory.
         """
+        import heapq
         try:
-            df = pd.read_csv(file_path)
-            if len(df) > n * 10:
-                df = df.nlargest(n * 10, 'odds_ratio')
-            
-            df = df.nlargest(n, 'odds_ratio')
-            return df[['source', 'target', 'weight', 'odds_ratio', 'p_value']].head(n).to_dict('records')
-            
+            heap = []  # min-heap of (odds_ratio, idx, row_dict)
+            counter = 0
+            sep = '\t' if str(file_path).endswith('.tsv') else ','
+            for chunk in pd.read_csv(file_path, sep=sep, chunksize=50000):
+                for _, row in chunk.iterrows():
+                    item = (
+                        float(row['odds_ratio']),
+                        counter,
+                        {
+                            'source': row['source'],
+                            'target': row['target'],
+                            'weight': row['weight'],
+                            'odds_ratio': float(row['odds_ratio']),
+                            'p_value': float(row['p_value']),
+                        }
+                    )
+                    counter += 1
+                    if len(heap) < n:
+                        heapq.heappush(heap, item)
+                    elif item[0] > heap[0][0]:
+                        heapq.heapreplace(heap, item)
+            return [r for _, _, r in sorted(heap, key=lambda x: -x[0])]
         except Exception as e:
             logger.error(f"Error getting top pairs: {e}")
             return []
     
+    # ------------------------------------------------------------------
+    # Bipartite dual projection: gene-gene AND disease-disease in one pass
+    # ------------------------------------------------------------------
+    def _load_bipartite(self, input_file, sep=None, encoding='utf-8'):
+        """Load a bipartite gene-disease edgelist once, building BOTH:
+            col0_to_col1  (e.g. gene -> set of diseases)
+            col1_to_col0  (e.g. disease -> set of genes)
+        Returns (col0_to_col1, col1_to_col0, n_total_rows).
+        """
+        if sep is None:
+            sep = self.detect_separator(input_file)
+        has_hdr = self.has_header(input_file, sep)
+        header_arg = 0 if has_hdr else None
+        logger.info(f"_load_bipartite: sep={repr(sep)}, header={'yes' if has_hdr else 'no'}")
+
+        col0_to_col1 = defaultdict(set)
+        col1_to_col0 = defaultdict(set)
+        n_rows = 0
+
+        reader = pd.read_csv(
+            input_file, sep=sep, header=header_arg,  # type: ignore[arg-type]
+            chunksize=self.chunk_size, dtype=str,
+            encoding=encoding, engine='python', skipinitialspace=True,
+        )
+        for chunk in reader:
+            if chunk.shape[1] < 2:
+                continue
+            for idx in chunk.index:
+                u = str(chunk.iloc[:, 0].loc[idx]).strip()
+                v = str(chunk.iloc[:, 1].loc[idx]).strip()
+                if not u or not v or u.lower() in ('nan', 'none') or v.lower() in ('nan', 'none'):
+                    continue
+                if v not in col0_to_col1[u]:
+                    col0_to_col1[u].add(v)
+                    col1_to_col0[v].add(u)
+                    n_rows += 1
+        logger.info(f"Loaded {n_rows} unique edges, {len(col0_to_col1)} col-0 entities, {len(col1_to_col0)} col-1 entities")
+        return col0_to_col1, col1_to_col0, n_rows
+
+    def _compute_projection(self, ref_to_nodes, output_file,
+                            min_shared=1, min_expected=None,
+                            p_threshold=0.05, or_threshold=1.0):
+        """For a given reference->nodes mapping, compute odds-ratio pairs
+        between nodes that share references using Fisher's exact test
+        (statistically valid for sparse contingency tables — unlike
+        chi-square which requires expected cell counts >= 5).
+
+        Write 4-column TSV: source  target  odds_ratio  p_value
+        `min_expected` is accepted for API compatibility but ignored
+        (Fisher's exact has no min-count requirement).
+        Returns number of pairs written.
+        """
+        # node_counts[v] = number of unique references containing v
+        node_counts = defaultdict(int)
+        for _ref, nodes in ref_to_nodes.items():
+            for v in nodes:
+                node_counts[v] += 1
+        total_refs = len(ref_to_nodes)
+
+        # Aggregate pair counts across ALL references (single dict, correct
+        # across batches — avoids the cross-batch bug of the original code).
+        pair_counts = defaultdict(int)
+        for _ref, nodes in ref_to_nodes.items():
+            if len(nodes) < 2:
+                continue
+            nodes_list = sorted(nodes)
+            for i in range(len(nodes_list)):
+                ni = nodes_list[i]
+                for j in range(i + 1, len(nodes_list)):
+                    pair_counts[(ni, nodes_list[j])] += 1
+
+        os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
+        written = 0
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("source\ttarget\tweight\tpvalue\n")
+            for (n1, n2), a in pair_counts.items():
+                if a < min_shared:
+                    continue
+                b = node_counts[n1] - a
+                c = node_counts[n2] - a
+                d = total_refs - (a + b + c)
+                # Fisher's exact handles zero cells, but b,c,d must be >= 0
+                if b < 0 or c < 0 or d < 0:
+                    continue
+                try:
+                    _res = fisher_exact(
+                        [[a, b], [c, d]], alternative='two-sided'
+                    )
+                    p_val = float(_res[1])  # type: ignore[arg-type]
+                    if np.isnan(p_val):
+                        continue
+                    # Haldane-Anscombe corrected OR (finite even with zero cells)
+                    or_val = ((a + 0.5) * (d + 0.5)) / ((b + 0.5) * (c + 0.5))
+                    # Significance filter: only keep positively associated, significant pairs
+                    if p_val >= p_threshold or or_val <= or_threshold:
+                        continue
+                    f.write(f"{n1}\t{n2}\t{or_val:.6f}\t{p_val:.6e}\n")
+                    written += 1
+                except Exception as e:
+                    logger.warning(f"Skipped pair {n1}-{n2}: {e}")
+        logger.info(f"Wrote {written} pairs to {output_file}")
+        return written
+
+    def run_dual_bipartite_analysis(self, input_file,
+                                    col0_pairs_output,   # gene-gene (shared diseases, if col0=gene)
+                                    col1_pairs_output,   # disease-disease (shared genes, if col0=gene)
+                                    sep=None, encoding='utf-8',
+                                    min_shared=1, min_expected=5,
+                                    p_threshold=0.05, or_threshold=1.0,
+                                    progress_callback=None):
+        """Run BOTH projections of a bipartite input in a single pass.
+
+        Convention given input file with iloc[0]=A, iloc[1]=B:
+          - col0_pairs_output: pairs of A-entities, weighted by shared B's
+            (i.e. use B as reference, A as node)
+          - col1_pairs_output: pairs of B-entities, weighted by shared A's
+            (i.e. use A as reference, B as node)
+
+        For a gene-disease file with iloc[0]=gene, iloc[1]=disease:
+          col0_pairs_output → gene-gene (shared diseases)
+          col1_pairs_output → disease-disease (shared genes)
+        """
+        try:
+            col0_to_col1, col1_to_col0, _n = self._load_bipartite(
+                input_file, sep=sep, encoding=encoding
+            )
+            if progress_callback:
+                progress_callback(40)
+
+            # gene-gene: nodes are col-0 entities, references are col-1 entities
+            n_col0_pairs = self._compute_projection(
+                ref_to_nodes=col1_to_col0,
+                output_file=col0_pairs_output,
+                min_shared=min_shared, min_expected=min_expected,
+                p_threshold=p_threshold, or_threshold=or_threshold,
+            )
+            if progress_callback:
+                progress_callback(70)
+
+            # disease-disease: nodes are col-1 entities, references are col-0 entities
+            n_col1_pairs = self._compute_projection(
+                ref_to_nodes=col0_to_col1,
+                output_file=col1_pairs_output,
+                min_shared=min_shared, min_expected=min_expected,
+                p_threshold=p_threshold, or_threshold=or_threshold,
+            )
+            if progress_callback:
+                progress_callback(100)
+
+            return {
+                'success': True,
+                'col0_entities': len(col0_to_col1),
+                'col1_entities': len(col1_to_col0),
+                'col0_pairs':    n_col0_pairs,
+                'col1_pairs':    n_col1_pairs,
+                'col0_output':   col0_pairs_output,
+                'col1_output':   col1_pairs_output,
+            }
+        except Exception as e:
+            import traceback
+            logger.error(f"Dual bipartite analysis failed: {e}")
+            logger.error(traceback.format_exc())
+            return {'success': False, 'error': str(e)}
+
     # Για συμβατότητα με παλιό κώδικα
-    def run_full_analysis(self, input_file, reference_column='col1', 
+    def run_full_analysis(self, input_file, reference_column='col1',
                          output_file=None, p_threshold=0.05, or_threshold=1.0,
                          return_top_n=100):
         """Παλιά μέθοδος για συμβατότητα"""

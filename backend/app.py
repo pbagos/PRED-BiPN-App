@@ -41,7 +41,7 @@ from resource_allocation import run_resource_allocation_similarity
 from jaccard import run_jaccard_analysis, JaccardSimilarityAnalyzer
 from kendall import run_kendall_analysis
 from spearman import run_spearman_analysis
-from pearson import run_pearson_analysis
+from pearson import run_pearson_analysis, run_bipartite_pearson_dual
 from edge_betweenness import run_girvan_newman_analysis
 from global_threshold import run_global_threshold
 
@@ -278,30 +278,29 @@ def _execute_processing(data, task_id):
                 result_files = {'result_file': os.path.basename(output_path)}
 
             elif method.lower() == "odds ratio weighted projection":
-                p_threshold = float(data.get('p_threshold', 0.05))
+                p_threshold  = float(data.get('p_threshold', 0.05))
                 or_threshold = float(data.get('or_threshold', 1.0))
-                return_top_n = int(data.get('return_top_n', 100))
-                app.logger.info(f"Starting odds ratio analysis")
-                output_full_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_full.tsv")
-                output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
+                app.logger.info(
+                    f"Starting bipartite odds ratio analysis (p<{p_threshold}, OR>{or_threshold})"
+                )
+                # Output 1: pairs of col-0 entities (genes if input is gene\tdisease)
+                output_node1 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node1.tsv")
+                # Output 2: pairs of col-1 entities (diseases if input is gene\tdisease)
+                output_node2 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node2.tsv")
                 calculator = OddsRatioCalculator(chunk_size=20000, batch_size=50000)
-                results = calculator.run_full_analysis_flexible(
-                    input_file=input_path, output_file=output_full_path,
+                results = calculator.run_dual_bipartite_analysis(
+                    input_file=input_path,
+                    col0_pairs_output=output_node1,
+                    col1_pairs_output=output_node2,
+                    sep=None,
                     p_threshold=p_threshold, or_threshold=or_threshold,
-                    return_top_n=return_top_n, sep=None, header='infer', progress_callback=None
+                    progress_callback=None
                 )
                 if not results['success']:
-                    raise RuntimeError(results.get('message', 'Odds ratio analysis failed'))
-                try:
-                    df_full = pd.read_csv(output_full_path, sep='\t')
-                    df_simple = df_full[['source', 'target', 'weight', 'odds_ratio', 'p_value']]
-                    df_simple.to_csv(output_path, index=False, sep='\t')
-                except Exception as e:
-                    app.logger.warning(f"Could not create simplified version: {e}")
-                    output_path = output_full_path
+                    raise RuntimeError(results.get('error', 'Odds ratio analysis failed'))
                 result_files = {
-                    'result_file': os.path.basename(output_path),
-                    'full_results_file': os.path.basename(output_full_path)
+                    'node1_file': os.path.basename(output_node1),
+                    'node2_file': os.path.basename(output_node2)
                 }
                 response_data = {
                     'success': True, 'task_id': task_id, 'files': result_files,
@@ -454,19 +453,23 @@ def _execute_processing(data, task_id):
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "pearson correlation weighted projection":
-                threshold = float(data.get('threshold', 0.0))
-                chunksize = int(data.get('chunksize', 10000))
-                stats, output_filename = run_pearson_analysis(
-                    input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, chunksize=chunksize, logger=app.logger, progress_callback=None
+                p_threshold = float(data.get('threshold', 0.05))
+                app.logger.info(f"Starting bipartite Pearson dual projection (p<{p_threshold})")
+                node1_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                node2_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                stats = run_bipartite_pearson_dual(
+                    input_file=input_path,
+                    node1_output=node1_output,
+                    node2_output=node2_output,
+                    p_threshold=p_threshold,
+                    logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Pearson failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {
+                    'node1_file': os.path.basename(node1_output),
+                    'node2_file': os.path.basename(node2_output)
+                }
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "edge betweenness":

@@ -25,8 +25,11 @@ class BaseGeneCorrelationAnalyzer:
         self.filepath           = filepath
         self.chunksize          = chunksize
         self.gene_dict          = {}
+        self._col0_set          = set()   # entities that appeared in column 0
+        self._col1_set          = set()   # entities that appeared in column 1
         self.matrix             = None
         self.correlation_matrix = None
+        self.pvalue_matrix      = None
         self.logger             = logger
         self.progress_callback  = None
 
@@ -59,6 +62,20 @@ class BaseGeneCorrelationAnalyzer:
         self._log(f"Detected separator: {repr(sep)}")
         return sep
 
+    def _has_header(self, sep):
+        """First-line check: if cols 0 and 1 are both non-numeric header
+        keywords (source/target/from/to/node/gene/...) treat row as header."""
+        kw = {'source', 'target', 'from', 'to', 'node', 'gene',
+              'src', 'dst', 'id', 'name', 'weight', 'score'}
+        with open(self.filepath, 'r', encoding='utf-8') as f:
+            line = f.readline().strip()
+        if not line:
+            return False
+        parts = line.split(sep if sep != r'\s+' else None)
+        if len(parts) < 2:
+            return False
+        return parts[0].strip().lower() in kw and parts[1].strip().lower() in kw
+
     def _count_lines(self):
         """Count all lines in file (header=None — no line subtracted)."""
         with open(self.filepath, 'r', encoding='utf-8') as f:
@@ -69,10 +86,13 @@ class BaseGeneCorrelationAnalyzer:
     # ------------------------------------------------------------------
     def _clean_data(self, chunk):
         """
-        Drop NaN rows and rows where iloc[0] or iloc[1] contain 'nan'/'None'.
-        Uses iloc so it works regardless of column names.
+        Drop rows where iloc[0] or iloc[1] are NaN or literally 'nan'/'None'.
+        Only inspects the first two columns — trailing separators or extra
+        all-NaN columns must not cause every row to be dropped.
         """
-        chunk = chunk.dropna()
+        if chunk.shape[1] < 2:
+            return chunk.iloc[0:0]
+        chunk = chunk[chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna()]
         chunk = chunk[~chunk.iloc[:, 0].astype(str).str.contains(
             'nan|None', case=False, na=False)]
         chunk = chunk[~chunk.iloc[:, 1].astype(str).str.contains(
@@ -83,7 +103,9 @@ class BaseGeneCorrelationAnalyzer:
     # Mappings
     # ------------------------------------------------------------------
     def _process_chunk(self, chunk):
-        """Build a local gene dict from one chunk — positional access only."""
+        """Build a local gene dict from one chunk — positional access only.
+        Tracks which entities appear in column 0 vs column 1 so we can later
+        decide if the input is bipartite or one-mode."""
         chunk = self._clean_data(chunk)
         local = {}
         for _, row in chunk.iterrows():
@@ -95,6 +117,8 @@ class BaseGeneCorrelationAnalyzer:
                 local[g1] = len(local)
             if g2 not in local:
                 local[g2] = len(local)
+            self._col0_set.add(g1)
+            self._col1_set.add(g2)
         return local
 
     def build_mappings(self):
@@ -107,10 +131,14 @@ class BaseGeneCorrelationAnalyzer:
 
         sep          = self._detect_separator()
         total_lines  = self._count_lines()
-        total_chunks = max(1, total_lines // self.chunksize)
+        skip         = 1 if self._has_header(sep) else 0
+        if skip:
+            self._log("Header row detected; skipping line 1.")
+        total_chunks = max(1, (total_lines - skip) // self.chunksize)
 
         chunk_reader = pd.read_csv(
             self.filepath, sep=sep, header=None,
+            skiprows=skip,
             chunksize=self.chunksize, dtype=str,
             engine='python', skipinitialspace=True,
             usecols=[0, 1]
@@ -151,10 +179,17 @@ class BaseGeneCorrelationAnalyzer:
         for _, row in chunk.iterrows():
             g1 = str(row.iloc[0]).strip()
             g2 = str(row.iloc[1]).strip()
-            try:
-                weight = float(row.iloc[2]) if len(row) > 2 else 1.0
-            except (ValueError, TypeError):
-                weight = 1.0
+            # Default to 1.0 if weight is missing, non-numeric, NaN, or <= 0.
+            # A trailing separator can create a phantom NaN column 2; float(NaN)
+            # returns NaN silently (no exception), which would poison the matrix.
+            weight = 1.0
+            if len(row) > 2:
+                try:
+                    w = float(row.iloc[2])
+                    if not np.isnan(w) and w > 0:
+                        weight = w
+                except (ValueError, TypeError):
+                    pass
             if not g1 or not g2:
                 continue
             try:
@@ -175,10 +210,12 @@ class BaseGeneCorrelationAnalyzer:
 
         sep          = self._detect_separator()
         total_lines  = self._count_lines()
-        total_chunks = max(1, total_lines // self.chunksize)
+        skip         = 1 if self._has_header(sep) else 0
+        total_chunks = max(1, (total_lines - skip) // self.chunksize)
 
         chunk_reader = pd.read_csv(
             self.filepath, sep=sep, header=None,
+            skiprows=skip,
             chunksize=self.chunksize, dtype=str,
             engine='python', skipinitialspace=True
             # no usecols — may need col 2 for weight
@@ -217,7 +254,11 @@ class BaseGeneCorrelationAnalyzer:
 # Module-level static function (picklable for multiprocessing)
 # ------------------------------------------------------------------
 def _calculate_pearson_static(args):
-    """Compute Pearson r for a batch of gene pairs."""
+    """Compute Pearson r for a batch of gene pairs.
+
+    `threshold` here is interpreted as a p-value cutoff: pairs with
+    p_value >= threshold are dropped. Set threshold >= 1.0 to keep all.
+    """
     from scipy.sparse import csr_matrix as _csr
     from scipy.stats import pearsonr as _pearsonr
     matrix_data, gene_pairs, threshold = args
@@ -231,11 +272,12 @@ def _calculate_pearson_static(args):
         try:
             _pr = _pearsonr(vec_i, vec_j)
             corr_val = float(_pr[0])  # type: ignore[arg-type]
-            if np.isnan(corr_val):
+            p_val    = float(_pr[1])  # type: ignore[arg-type]
+            if np.isnan(corr_val) or np.isnan(p_val):
                 continue
-            if abs(corr_val) < threshold:
+            if p_val >= threshold:
                 continue
-            results.append((i, j, corr_val))
+            results.append((i, j, corr_val, p_val))
         except Exception:
             continue
     return results
@@ -247,62 +289,151 @@ def _calculate_pearson_static(args):
 class PearsonCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
     """Computes Pearson correlations between genes."""
 
-    def compute_correlations(self, threshold=0.0):
-        self._log(f"Computing Pearson correlations (threshold={threshold})...")
+    def compute_correlations(self, threshold=0.05, output_file=None):
+        """
+        Stream gene-gene Pearson correlations directly to `output_file`.
+        Only pairs (i, j) where BOTH i and j appeared in column 0 (genes) are
+        computed — gene-disease and disease-disease pairs are skipped.
+
+        `threshold` is a p-value cutoff: pairs with p_value >= threshold
+        are dropped before writing. Default 0.05 (classic significance level).
+        Set threshold >= 1.0 to keep every pair.
+        """
+        self._log(f"Computing Pearson correlations (p-value cutoff < {threshold})...")
         self._update_progress(45, "Step 3/4: Computing Pearson correlations...")
 
         assert self.matrix is not None
-        n           = self.matrix.shape[0]  # type: ignore[index]
-        pairs       = [(i, j) for i in range(n) for j in range(i + 1, n)]
-        total_pairs = len(pairs)
-        self._log(f"Total gene pairs: {total_pairs}")
+        n = self.matrix.shape[0]  # type: ignore[index]
 
-        if total_pairs < 10000:
-            batch_size = max(100, total_pairs // (cpu_count() * 2))
+        # DIAGNOSTIC
+        self._log(f"[DIAG] Matrix shape: {self.matrix.shape}, nnz: {self.matrix.nnz}")
+        self._log(f"[DIAG] gene_dict size: {len(self.gene_dict)}")
+        self._log(f"[DIAG] _col0_set size: {len(self._col0_set)}")
+        if self._col0_set:
+            sample_col0 = list(self._col0_set)[:5]
+            self._log(f"[DIAG] _col0_set sample: {sample_col0}")
+
+        # Decide bipartite vs one-mode by column overlap.
+        # One-mode: col0 and col1 share most entities → use ALL nodes.
+        # Bipartite: col0 and col1 are mostly disjoint → restrict to col0 nodes.
+        overlap = self._col0_set & self._col1_set
+        smaller = min(len(self._col0_set), len(self._col1_set)) or 1
+        overlap_ratio = len(overlap) / smaller
+        if overlap_ratio >= 0.5:
+            self._log(f"[DIAG] One-mode input detected (overlap={overlap_ratio:.2f}); pairing all nodes.")
+            gene_indices = list(range(n))
         else:
-            batch_size = min(1000, total_pairs // (cpu_count() * 10))
-        batch_size = max(1, batch_size)
+            self._log(f"[DIAG] Bipartite input detected (overlap={overlap_ratio:.2f}); pairing col-0 entities only.")
+            gene_indices = sorted(
+                self.gene_dict[g] for g in self._col0_set if g in self.gene_dict
+            )
+            if not gene_indices:
+                self._log("[DIAG] col-0 set empty; falling back to all indices.", 'warning')
+                gene_indices = list(range(n))
+        g_count = len(gene_indices)
+        total_pairs = g_count * (g_count - 1) // 2
+        self._log(f"Genes: {g_count}, total gene-gene pairs: {total_pairs}")
 
-        batches       = [pairs[i:i + batch_size] for i in range(0, total_pairs, batch_size)]
-        total_batches = len(batches)
-        self._log(f"Batches: {total_batches} × ~{batch_size}")
+        # Sanity check: how non-zero is a typical gene row?
+        if g_count > 0:
+            sample_i = gene_indices[0]
+            row_nnz = self.matrix.getrow(sample_i).nnz  # type: ignore[union-attr]
+            self._log(f"[DIAG] First gene (index {sample_i}) row nnz: {row_nnz}")
 
-        self.correlation_matrix = lil_matrix((n, n))
-        processed_pairs = 0
+        if total_pairs == 0:
+            self._update_progress(90, "No pairs to compute")
+            return 0
 
-        assert self.matrix is not None
+        batch_size = max(200, min(2000, total_pairs // (cpu_count() * 20) or 200))
+
         matrix_csr  = self.matrix.tocsr()  # type: ignore[union-attr]
         matrix_data = (n, matrix_csr.data, matrix_csr.indices, matrix_csr.indptr)
-        args        = [(matrix_data, b, threshold) for b in batches]
 
+        # Lazy pair generator
+        def pair_gen():
+            for ii in range(g_count):
+                i = gene_indices[ii]
+                for jj in range(ii + 1, g_count):
+                    yield (i, gene_indices[jj])
+
+        # Group lazily into (matrix_data, batch, threshold) tuples
+        def args_gen():
+            batch = []
+            for pair in pair_gen():
+                batch.append(pair)
+                if len(batch) >= batch_size:
+                    yield (matrix_data, batch, threshold)
+                    batch = []
+            if batch:
+                yield (matrix_data, batch, threshold)
+
+        keys = list(self.gene_dict.keys())
+        os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True) if output_file else None
+
+        written = 0
+        processed = 0
         original_cb            = self.progress_callback
-        self.progress_callback = None          # remove before fork
+        self.progress_callback = None  # remove before fork
+
+        f_out = open(output_file, 'w', encoding='utf-8') if output_file else None
+        if f_out:
+            f_out.write("source\ttarget\tweight\tp_value\n")
+
+        def consume(iterable, parallel_label):
+            nonlocal written, processed
+            for batch_idx, batch_result in enumerate(iterable):
+                for i, j, val, p in batch_result:
+                    if f_out:
+                        f_out.write(f"{keys[i]}\t{keys[j]}\t{val:.6f}\t{p:.6e}\n")
+                        written += 1
+                processed += batch_size
+                if (batch_idx + 1) % 50 == 0:
+                    if f_out:
+                        f_out.flush()
+                    pct = min(90, 50 + int(40 * processed / max(1, total_pairs)))
+                    self._update_progress(pct, f"[{parallel_label}] ~{processed}/{total_pairs} pairs, {written} written")
 
         try:
-            with Pool(cpu_count()) as pool:
-                for idx, batch_result in enumerate(
-                    pool.imap_unordered(_calculate_pearson_static, args)
-                ):
-                    for i, j, val in batch_result:
-                        self.correlation_matrix[i, j] = val
-                        self.correlation_matrix[j, i] = val
-                        processed_pairs += 1
-                    if (idx + 1) % 100 == 0 or (idx + 1) == total_batches:
-                        self._update_progress(
-                            50 + int(40 * (idx + 1) / total_batches),
-                            f"Batch {idx+1}/{total_batches}, pairs found: {processed_pairs}"
+            pool = None
+            try:
+                pool = Pool(cpu_count())
+            except Exception as e:
+                self._log(f"Pool init failed ({e}); running sequentially.", 'warning')
+
+            if pool is not None:
+                try:
+                    with pool:
+                        consume(
+                            pool.imap_unordered(_calculate_pearson_static, args_gen()),
+                            "parallel"
                         )
+                except Exception as e:
+                    self._log(f"Parallel pass failed ({e}); falling back to sequential.", 'warning')
+                    # Re-open file fresh — partial output may be junk after a crash mid-batch
+                    if f_out:
+                        f_out.close()
+                    f_out = open(output_file, 'w', encoding='utf-8') if output_file else None
+                    if f_out:
+                        f_out.write("source\ttarget\tweight\tp_value\n")
+                    written = 0
+                    processed = 0
+                    consume((_calculate_pearson_static(a) for a in args_gen()), "sequential")
+            else:
+                consume((_calculate_pearson_static(a) for a in args_gen()), "sequential")
         finally:
             self.progress_callback = original_cb
+            if f_out:
+                f_out.close()
 
-        significant = self.correlation_matrix.nnz // 2
-        self._log(f"Significant pairs (|r| >= {threshold}): {significant}")
-        self._update_progress(90, f"Found {significant} significant correlations")
-        return self.correlation_matrix
+        self._log(f"Pairs written: {written}")
+        self._update_progress(95, f"Found {written} correlations")
+        return written
 
     def save_results(self, output_file, threshold=0.0):
         """
-        Saves results as CSV with columns: source, target, weight
+        Saves results as TSV with columns: source, target, weight, p_value
+        weight   = Pearson correlation r
+        p_value  = two-sided p-value from scipy.stats.pearsonr
         """
         self._log(f"Saving results to {output_file}...")
         self._update_progress(95, "Step 4/4: Saving results...")
@@ -310,14 +441,15 @@ class PearsonCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
         keys        = list(self.gene_dict.keys())
         saved_pairs = 0
 
+        assert self.correlation_matrix is not None
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\n")
-            assert self.correlation_matrix is not None
-        for i in range(self.correlation_matrix.shape[0]):  # type: ignore[index]
+            f.write("source\ttarget\tweight\tp_value\n")
+            for i in range(self.correlation_matrix.shape[0]):  # type: ignore[index]
                 for j in range(i + 1, self.correlation_matrix.shape[1]):  # type: ignore[index]
                     corr = self.correlation_matrix[i, j]
                     if corr != 0 and abs(corr) >= threshold:
-                        f.write(f"{keys[i]}\t{keys[j]}\t{corr:.6f}\n")
+                        p = self.pvalue_matrix[i, j] if self.pvalue_matrix is not None else float('nan')
+                        f.write(f"{keys[i]}\t{keys[j]}\t{corr:.6f}\t{p:.6e}\n")
                         saved_pairs += 1
 
         self._log(f"Saved {saved_pairs} pairs to {output_file}")
@@ -326,12 +458,208 @@ class PearsonCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
 
 
 # ------------------------------------------------------------------
-# Flask helper
+# Bipartite dual-projection Pearson (incidence matrix approach)
 # ------------------------------------------------------------------
-def run_pearson_analysis(input_file, output_dir, threshold=0.0, chunksize=10000,
+def _detect_sep(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        line = f.readline()
+    if '\t' in line: return '\t'
+    if ',' in line:  return ','
+    if ';' in line:  return ';'
+    return r'\s+'
+
+
+def _has_header_line(filepath, sep):
+    kw = {'source', 'target', 'from', 'to', 'node', 'gene', 'src', 'dst',
+          'id', 'name', 'weight', 'score', 'disease'}
+    with open(filepath, 'r', encoding='utf-8') as f:
+        line = f.readline().strip()
+    if not line:
+        return False
+    parts = line.split(sep if sep != r'\s+' else None)
+    if len(parts) < 2:
+        return False
+    return (parts[0].strip().lower() in kw and parts[1].strip().lower() in kw)
+
+
+def _build_incidence_matrix(input_file, logger=None):
+    """Load a bipartite edgelist and return (col0_labels, col1_labels, B).
+
+    B is a dense float numpy array of shape (|col0|, |col1|), with B[i,j]
+    holding the edge weight (default 1.0) between col0_labels[i] and col1_labels[j].
+    Duplicates are deduplicated to first occurrence.
+    """
+    sep  = _detect_sep(input_file)
+    skip = 1 if _has_header_line(input_file, sep) else 0
+    if logger:
+        logger.info(f"Loading incidence matrix from {input_file} (sep={repr(sep)}, skip_header={bool(skip)})")
+
+    col0_to_idx = {}
+    col1_to_idx = {}
+    triples = []  # (i, j, w)
+
+    reader = pd.read_csv(
+        input_file, sep=sep, header=None,
+        skiprows=skip, dtype=str,
+        engine='python', skipinitialspace=True,
+        chunksize=50000,
+    )
+    seen = set()
+    for chunk in reader:
+        if chunk.shape[1] < 2:
+            continue
+        chunk = chunk[chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna()]
+        for _, row in chunk.iterrows():
+            u = str(row.iloc[0]).strip()
+            v = str(row.iloc[1]).strip()
+            if not u or not v or u.lower() in ('nan', 'none') or v.lower() in ('nan', 'none'):
+                continue
+            if (u, v) in seen:
+                continue
+            seen.add((u, v))
+            # weight
+            w = 1.0
+            if len(row) > 2:
+                try:
+                    val = float(row.iloc[2])
+                    if not np.isnan(val) and val > 0:
+                        w = val
+                except (ValueError, TypeError):
+                    pass
+            if u not in col0_to_idx:
+                col0_to_idx[u] = len(col0_to_idx)
+            if v not in col1_to_idx:
+                col1_to_idx[v] = len(col1_to_idx)
+            triples.append((col0_to_idx[u], col1_to_idx[v], w))
+
+    n_rows = len(col0_to_idx)
+    n_cols = len(col1_to_idx)
+    B = np.zeros((n_rows, n_cols), dtype=np.float32)
+    for i, j, w in triples:
+        B[i, j] = w
+    if logger:
+        logger.info(f"Incidence matrix: {n_rows} x {n_cols}, nonzeros={len(triples)}")
+
+    col0_labels = [None] * n_rows
+    for k, idx in col0_to_idx.items():
+        col0_labels[idx] = k
+    col1_labels = [None] * n_cols
+    for k, idx in col1_to_idx.items():
+        col1_labels[idx] = k
+    return col0_labels, col1_labels, B
+
+
+def _write_pearson_projection(M, labels, output_file, p_threshold=0.05, logger=None):
+    """Compute Pearson r and p-value for all row pairs of M, write significant
+    pairs to `output_file` as TSV: source target weight pvalue.
+
+    Uses numpy.corrcoef vectorized; p-values computed in bulk via the
+    t-distribution survival function.
+    """
+    n_rows, n_cols = M.shape
+    if n_rows < 2 or n_cols < 3:
+        if logger:
+            logger.warning(f"Not enough rows ({n_rows}) or columns ({n_cols}) for Pearson")
+        # still emit a header-only file so downstream code is happy
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("source\ttarget\tweight\tpvalue\n")
+        return 0
+
+    if logger:
+        logger.info(f"Computing {n_rows}x{n_rows} correlation matrix from {n_rows}x{n_cols} input...")
+    R = np.corrcoef(M)  # n_rows x n_rows; NaN for zero-variance rows
+
+    iu_i, iu_j = np.triu_indices(n_rows, k=1)
+    r_vec = R[iu_i, iu_j]
+
+    valid = np.isfinite(r_vec)
+    if not np.any(valid):
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("source\ttarget\tweight\tpvalue\n")
+        return 0
+
+    df = n_cols - 2
+    r_clipped = np.clip(r_vec[valid], -0.999999, 0.999999)
+    t_stat    = r_clipped * np.sqrt(df / (1.0 - r_clipped * r_clipped))
+    from scipy.stats import t as _tdist
+    p_vec_valid = 2.0 * _tdist.sf(np.abs(t_stat), df)
+
+    # Apply p-value threshold within the valid subset
+    sig_mask = p_vec_valid < p_threshold
+    sig_idx_valid = np.where(sig_mask)[0]
+
+    # Map back to original flat indices
+    valid_flat = np.where(valid)[0]
+    chosen_flat = valid_flat[sig_idx_valid]
+
+    rows_i = iu_i[chosen_flat]
+    rows_j = iu_j[chosen_flat]
+    r_out  = r_vec[chosen_flat]
+    p_out  = p_vec_valid[sig_idx_valid]
+
+    os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("source\ttarget\tweight\tpvalue\n")
+        for a, b, r_, p_ in zip(rows_i, rows_j, r_out, p_out):
+            f.write(f"{labels[int(a)]}\t{labels[int(b)]}\t{float(r_):.6f}\t{float(p_):.6e}\n")
+
+    if logger:
+        logger.info(f"Wrote {len(rows_i)} significant pairs (p<{p_threshold}) to {output_file}")
+    return int(len(rows_i))
+
+
+def run_bipartite_pearson_dual(input_file, node1_output, node2_output,
+                               p_threshold=0.05, logger=None, progress_callback=None):
+    """Run dual bipartite Pearson projection in one pass.
+
+    For input with iloc[0]=col0_entity, iloc[1]=col1_entity:
+      - node1_output: pairs of col-0 entities (e.g. gene-gene if col0=gene)
+      - node2_output: pairs of col-1 entities (e.g. disease-disease if col1=disease)
+
+    Output schema for both files: source\\ttarget\\tweight\\tpvalue
+    (weight = Pearson r; only pairs with p < p_threshold are kept.)
+    """
+    start = time.time()
+    try:
+        if progress_callback: progress_callback(5)
+        col0_labels, col1_labels, B = _build_incidence_matrix(input_file, logger=logger)
+        if progress_callback: progress_callback(30)
+
+        # col0-col0 projection: rows of B
+        n1 = _write_pearson_projection(B, col0_labels, node1_output, p_threshold, logger)
+        if progress_callback: progress_callback(65)
+
+        # col1-col1 projection: rows of B.T
+        n2 = _write_pearson_projection(B.T, col1_labels, node2_output, p_threshold, logger)
+        if progress_callback: progress_callback(100)
+
+        return {
+            'success':            True,
+            'col0_entities':      len(col0_labels),
+            'col1_entities':      len(col1_labels),
+            'node1_pairs':        n1,
+            'node2_pairs':        n2,
+            'p_threshold':        p_threshold,
+            'execution_time':     round(time.time() - start, 2),
+            'method':             'pearson_bipartite_dual',
+        }
+    except Exception as e:
+        if logger:
+            logger.error(f"Bipartite Pearson failed: {e}")
+            logger.error(traceback.format_exc())
+        return {'success': False, 'error': str(e)}
+
+
+# ------------------------------------------------------------------
+# Flask helper (legacy single-output entry point)
+# ------------------------------------------------------------------
+def run_pearson_analysis(input_file, output_dir, threshold=0.05, chunksize=10000,
                          logger=None, progress_callback=None):
     """
     Run Pearson correlation analysis — entry point for Flask.
+
+    `threshold` is a p-value cutoff (default 0.05). Pairs with
+    p_value >= threshold are dropped. Use threshold >= 1.0 to keep all.
 
     Returns:
         tuple: (stats_dict, output_filename)
@@ -348,8 +676,7 @@ def run_pearson_analysis(input_file, output_dir, threshold=0.0, chunksize=10000,
     try:
         analyzer.build_mappings()
         analyzer.construct_sparse_matrix()
-        analyzer.compute_correlations(threshold=threshold)
-        saved_pairs = analyzer.save_results(output_filename, threshold=threshold)
+        saved_pairs = analyzer.compute_correlations(threshold=threshold, output_file=output_filename)
 
         elapsed = time.time() - start_time
         _m = analyzer.matrix

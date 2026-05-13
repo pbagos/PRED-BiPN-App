@@ -969,6 +969,25 @@ function setupChooseMethod() {
         if (polyaPanel) {
             polyaPanel.style.display = selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
         }
+        const globalThresholdPanel = document.getElementById('globalThresholdPanel');
+        if (globalThresholdPanel) {
+            if (selectedMethod.toLowerCase() === 'global threshold filter') {
+                globalThresholdPanel.style.display = 'block';
+                const uploadedFile = sessionStorage.getItem('uploaded_file');
+                if (uploadedFile) {
+                    fetch(`${API_BASE}/get_file_columns?filename=${uploadedFile}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success && typeof updateThresholdPanel === 'function') {
+                                updateThresholdPanel(data.columns);
+                            }
+                        })
+                        .catch(() => {});
+                }
+            } else {
+                globalThresholdPanel.style.display = 'none';
+            }
+        }
     }
 
     // Toggle projections dropdown
@@ -1150,9 +1169,25 @@ continueBtn.addEventListener('click', async () => {
         }
 
         if (selectedMethod.toLowerCase() === 'global threshold filter') {
-            const thresholdParams = sessionStorage.getItem('threshold_params');
-            if (thresholdParams) {
-                const params = JSON.parse(thresholdParams);
+            let params = null;
+            const stored = sessionStorage.getItem('threshold_params');
+            if (stored) {
+                params = JSON.parse(stored);
+            } else {
+                // Fallback: read current panel values directly
+                const colSel = document.getElementById('thresholdColumn');
+                const dirSel = document.getElementById('thresholdDirection');
+                const valIn  = document.getElementById('thresholdValue');
+                if (colSel && dirSel && valIn && valIn.value !== '') {
+                    const dirRaw = dirSel.value;
+                    params = {
+                        column: colSel.value === 'auto' ? 'auto' : parseInt(colSel.value),
+                        direction: dirRaw === 'greater' ? 'gte' : dirRaw === 'less' ? 'lte' : dirRaw,
+                        value: parseFloat(valIn.value)
+                    };
+                }
+            }
+            if (params && !isNaN(params.value)) {
                 const direction = params.direction === 'greater' ? 'gte' :
                                   params.direction === 'less' ? 'lte' :
                                   params.direction;
@@ -1164,7 +1199,7 @@ continueBtn.addEventListener('click', async () => {
                     chunk_size: 50000
                 };
             } else {
-                alert('Please configure the threshold filter parameters first!');
+                alert('Please enter a threshold value.');
                 continueBtn.disabled = false;
                 continueBtn.textContent = 'Run Method';
                 if (processingPanel) processingPanel.style.display = 'none';
