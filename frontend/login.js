@@ -1,7 +1,9 @@
 // ============================
 // Global Variables
 // ============================
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:5050`;
+// Same-origin: the Flask backend serves this page, so relative URLs work both
+// locally (localhost:5050) and behind a proxy (Render/Heroku on 443).
+const API_BASE = '';
 
 const ALPHA_METHODS = [
     'disparity filter',
@@ -9,6 +11,58 @@ const ALPHA_METHODS = [
     'locally adaptive network sparsification filter',
     'marginal likelihood filter'
 ];
+
+// Per-method tunable parameters surfaced in the UI. Keys match what the backend
+// reads via data.get(...), so no backend change is needed — the values just get
+// sent in the /process request. Methods absent here use backend defaults.
+const METHOD_PARAMS = {
+    'cosine similarity weighted projection':            [{ key: 'threshold', label: 'Similarity threshold (0–1)', value: 0.5, min: 0, max: 1, step: 0.01 }],
+    'adamic adar similarity weighted projection':       [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
+    'resource allocation similarity weighted projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
+    'jaccard similarity weighted projection':           [{ key: 'threshold', label: 'Jaccard threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
+    'kendall correlation weighted projection':          [{ key: 'threshold', label: 'Correlation threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
+    'spearman correlation weighted projection':         [{ key: 'threshold', label: 'Correlation threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
+    'pearson correlation weighted projection':          [{ key: 'threshold', label: 'p-value threshold', value: 0.05, min: 0, max: 1, step: 0.001 }],
+    'odds ratio weighted projection': [
+        { key: 'p_threshold',  label: 'p-value threshold', value: 0.05, min: 0, max: 1, step: 0.001 },
+        { key: 'or_threshold', label: 'Odds ratio threshold', value: 1.0, min: 0, step: 0.1 }
+    ],
+    'high salience skeleton':  [{ key: 'threshold', label: 'Salience threshold (0–1)', value: 0.9, min: 0, max: 1, step: 0.01 }],
+    'hierarchical backbone': [
+        { key: 'z_threshold',     label: 'Z-score threshold', value: 1.64, step: 0.01 },
+        { key: 'alpha_percentile', label: 'Alpha percentile (1–100)', value: 95, min: 1, max: 100, step: 1 }
+    ]
+};
+
+function renderDynamicParams(method) {
+    const panel = document.getElementById('dynamicParamsPanel');
+    if (!panel) return;
+    const specs = METHOD_PARAMS[(method || '').toLowerCase()];
+    if (!specs) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+    }
+    panel.innerHTML = specs.map(s =>
+        `<label class="param-label" for="dp_${s.key}">${s.label}:</label>` +
+        `<input type="number" id="dp_${s.key}" class="param-input" value="${s.value}"` +
+        `${s.min != null ? ` min="${s.min}"` : ''}${s.max != null ? ` max="${s.max}"` : ''} step="${s.step || 'any'}" />`
+    ).join('');
+    panel.style.display = 'block';
+}
+
+function collectDynamicParams(method) {
+    const specs = METHOD_PARAMS[(method || '').toLowerCase()];
+    const out = {};
+    if (!specs) return out;
+    for (const s of specs) {
+        const el = document.getElementById('dp_' + s.key);
+        if (el && el.value !== '' && !isNaN(parseFloat(el.value))) {
+            out[s.key] = parseFloat(el.value);
+        }
+    }
+    return out;
+}
 
 let latestTaskId = null;
 let selectedMethod = null;
@@ -988,6 +1042,8 @@ function setupChooseMethod() {
                 globalThresholdPanel.style.display = 'none';
             }
         }
+
+        renderDynamicParams(selectedMethod);
     }
 
     // Toggle projections dropdown
@@ -1207,6 +1263,9 @@ continueBtn.addEventListener('click', async () => {
             }
         }
 
+        // Merge any per-method tunable params (threshold, p_threshold, etc.)
+        Object.assign(requestData, collectDynamicParams(selectedMethod));
+
         window.currentMethod = selectedMethod;
 
         // Start async processing — backend returns task_id immediately
@@ -1416,6 +1475,8 @@ function showGuideContent() {
     if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
     const polyaPanelGuide = document.getElementById('polyaPanel');
     if (polyaPanelGuide) polyaPanelGuide.style.display = 'none';
+    const dpGuide = document.getElementById('dynamicParamsPanel');
+    if (dpGuide) dpGuide.style.display = 'none';
     if (visualizationSection) visualizationSection.style.display = 'none';
 
     // Κρύβουμε και τα κουμπιά που μπορεί να είναι ορατά
@@ -1782,6 +1843,8 @@ function showInfoContent() {
     if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
     const polyaPanelInfo = document.getElementById('polyaPanel');
     if (polyaPanelInfo) polyaPanelInfo.style.display = 'none';
+    const dpInfo = document.getElementById('dynamicParamsPanel');
+    if (dpInfo) dpInfo.style.display = 'none';
     if (visualizationSection) visualizationSection.style.display = 'none';
     if (continueBtn) continueBtn.style.display = 'none';
     if (uploadBtn) uploadBtn.style.display = 'none';
@@ -2106,8 +2169,10 @@ function setupComparisonButtons() {
     const compareBtn = document.getElementById('compareNetworksInlineBtn');
     const hideBtn = document.getElementById('hideComparisonBtn');
     
-    if (!compareBtn) return;
-    
+    // ponytail: compare button isn't in the DOM; return a no-op so the
+    // destructure in DOMContentLoaded doesn't throw and abort init.
+    if (!compareBtn) return { updateButtonsState: () => {} };
+
     // Ενημέρωση κατάστασης κουμπιών
     function updateButtonsState() {
         const uploadedFile = sessionStorage.getItem('uploaded_file');
@@ -2345,6 +2410,10 @@ function resetToMainPage() {
     const polyaPanelReset = document.getElementById('polyaPanel');
     if (polyaPanelReset) {
         polyaPanelReset.style.display = 'none';
+    }
+    const dpReset = document.getElementById('dynamicParamsPanel');
+    if (dpReset) {
+        dpReset.style.display = 'none';
     }
     
     // 7. Κρύψιμο του download section
