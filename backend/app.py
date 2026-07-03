@@ -18,6 +18,14 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import base64
 
+# Ensure UTF-8 stdout/stderr so module print() calls (e.g. the '×' in matrix
+# logs) don't crash on a non-UTF-8 console when run without PYTHONUTF8=1.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8')
+    except (AttributeError, ValueError):
+        pass
+
 
 #Methods
 from disparity import run_disparity_filter
@@ -137,7 +145,9 @@ def _execute_processing(data, task_id):
             elif method.lower() == 'one mode projection':
                 node1_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
                 node2_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
-                run_one_mode_projection(input_path, node1_output, node2_output)
+                omp_res = run_one_mode_projection(input_path, node1_output, node2_output)
+                if isinstance(omp_res, dict) and not omp_res.get('success', True):
+                    raise RuntimeError(omp_res.get('error', 'One mode projection failed'))
                 result_files = {
                     'node1_file': os.path.basename(node1_output),
                     'node2_file': os.path.basename(node2_output)
@@ -731,14 +741,14 @@ def compare_networks():
         
         # Προσθήκη ακμών στο before
         for _, row in df_before.iterrows():
-            src = str(row[0])
-            tgt = str(row[1])
+            src = str(row.iloc[0])
+            tgt = str(row.iloc[1])
             G_before.add_edge(src, tgt)
         
         # Προσθήκη ακμών στο after
         for _, row in df_after.iterrows():
-            src = str(row[0])
-            tgt = str(row[1])
+            src = str(row.iloc[0])
+            tgt = str(row.iloc[1])
             G_after.add_edge(src, tgt)
         
         # Δημιουργία εικόνας για το before
