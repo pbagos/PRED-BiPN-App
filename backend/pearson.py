@@ -65,8 +65,10 @@ class BaseGeneCorrelationAnalyzer:
     def _has_header(self, sep):
         """First-line check: if cols 0 and 1 are both non-numeric header
         keywords (source/target/from/to/node/gene/...) treat row as header."""
-        kw = {'source', 'target', 'from', 'to', 'node', 'gene',
-              'src', 'dst', 'id', 'name', 'weight', 'score'}
+        kw = {'source', 'target', 'from', 'to', 'node', 'node1', 'node2',
+              'gene', 'genes', 'gene1', 'gene2', 'disease', 'diseases',
+              'src', 'dst', 'id', 'name', 'weight', 'score', 'value',
+              'col1', 'col2', 'edge', 'index'}
         with open(self.filepath, 'r', encoding='utf-8') as f:
             line = f.readline().strip()
         if not line:
@@ -93,10 +95,8 @@ class BaseGeneCorrelationAnalyzer:
         if chunk.shape[1] < 2:
             return chunk.iloc[0:0]
         chunk = chunk[chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna()]
-        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.contains(
-            'nan|None', case=False, na=False)]
-        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.contains(
-            'nan|None', case=False, na=False)]
+        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
+        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         return chunk
 
     # ------------------------------------------------------------------
@@ -470,8 +470,9 @@ def _detect_sep(filepath):
 
 
 def _has_header_line(filepath, sep):
-    kw = {'source', 'target', 'from', 'to', 'node', 'gene', 'src', 'dst',
-          'id', 'name', 'weight', 'score', 'disease'}
+    kw = {'source', 'target', 'from', 'to', 'node', 'node1', 'node2', 'gene',
+          'genes', 'gene1', 'gene2', 'src', 'dst', 'id', 'name', 'weight',
+          'score', 'value', 'disease', 'diseases', 'col1', 'col2', 'edge', 'index'}
     with open(filepath, 'r', encoding='utf-8') as f:
         line = f.readline().strip()
     if not line:

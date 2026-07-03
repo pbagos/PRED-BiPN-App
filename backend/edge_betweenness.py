@@ -287,8 +287,10 @@ class GirvanNewmanOptimized:
 # ------------------------------------------------------------------
 # Graph loader — positional access, auto-detect separator, tqdm
 # ------------------------------------------------------------------
-_HEADER_KEYWORDS = {'source', 'target', 'node', 'gene', 'from', 'to', 'src', 'dst',
-                    'protein', 'id', 'name', 'weight', 'score', 'edge'}
+_HEADER_KEYWORDS = {'source', 'target', 'node', 'node1', 'node2', 'gene', 'genes',
+                    'gene1', 'gene2', 'disease', 'diseases', 'from', 'to', 'src',
+                    'dst', 'protein', 'id', 'name', 'weight', 'score', 'value',
+                    'col1', 'col2', 'edge', 'index'}
 
 
 def _detect_separator_from_file(filepath: str) -> str:
@@ -345,8 +347,8 @@ def load_graph_from_file(filepath: str, max_lines: int = 500,
     for chunk in tqdm(chunk_reader, total=total_chunks, desc="Processing network"):
         # Clean
         chunk = chunk.dropna()
-        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.contains('nan|None', case=False, na=False)]
-        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.contains('nan|None', case=False, na=False)]
+        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
+        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
 
         for _, row in chunk.iterrows():
             if max_lines and loaded >= max_lines:

@@ -6,7 +6,10 @@ Reads any file format using positional access (no predefined column names):
     iloc[0] → entity A (gene)
     iloc[1] → entity B (disease)
 
-Output CSV columns: source, target
+Output columns (tab-separated): source, target
+This is the UNWEIGHTED one-mode projection — the co-occurrence count is used
+only to apply the threshold, not written. Use Simple Weighted Projection for
+weighted edges.
 """
 
 import os
@@ -185,8 +188,8 @@ class OneModeProjection:
     
     def _write_edges(self, projection_matrix, labels, output_filename):
         """
-        Writes upper-triangle edges as CSV with header: source, target
-        Uses comma separator. Skips diagonal and edges with weight <= threshold.
+        Writes upper-triangle edges as TSV with header: source, target
+        Uses tab separator. Skips diagonal and edges with weight <= threshold.
         """
         coo = projection_matrix.tocoo()
         

@@ -62,6 +62,38 @@ class BaseGeneCorrelationAnalyzer:
         with open(self.filepath, 'r', encoding='utf-8') as f:
             return sum(1 for _ in f)
 
+    def _has_header(self, sep):
+        """Row 1 is a header iff both leading cells are exact header keywords
+        (so real names like 'ALZHEIMER_DISEASE' survive), or col-2 flips
+        non-numeric→numeric between rows 1 and 2 (weighted files)."""
+        kw = {'source', 'target', 'from', 'to', 'node', 'node1', 'node2',
+              'gene', 'genes', 'gene1', 'gene2', 'disease', 'diseases',
+              'src', 'dst', 'id', 'name', 'weight', 'score', 'value',
+              'col1', 'col2', 'edge', 'index'}
+        splitter = None if sep == r'\s+' else sep
+        with open(self.filepath, 'r', encoding='utf-8') as f:
+            first = f.readline().strip()
+            second = f.readline().strip()
+        if not first:
+            return False
+        parts = first.split(splitter)
+        if len(parts) < 2:
+            return False
+        if parts[0].strip().lower() in kw and parts[1].strip().lower() in kw:
+            return True
+        if second and len(parts) > 2:
+            p2 = second.split(splitter)
+            if len(p2) > 2:
+                def _num(x):
+                    try:
+                        float(x)
+                        return True
+                    except ValueError:
+                        return False
+                if not _num(parts[2]) and _num(p2[2]):
+                    return True
+        return False
+
     # ------------------------------------------------------------------
     # Cleaning — positional / vectorized
     # ------------------------------------------------------------------
@@ -69,8 +101,8 @@ class BaseGeneCorrelationAnalyzer:
         """Vectorized clean — no iterrows."""
         chunk = chunk.dropna()
         mask = (
-            ~chunk.iloc[:, 0].astype(str).str.contains('nan|None', case=False, na=False) &
-            ~chunk.iloc[:, 1].astype(str).str.contains('nan|None', case=False, na=False)
+            ~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', '']) &
+            ~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])
         )
         return chunk[mask]
 
@@ -87,6 +119,7 @@ class BaseGeneCorrelationAnalyzer:
 
         chunk_reader = pd.read_csv(
             self.filepath, sep=sep, header=None,
+            skiprows=1 if self._has_header(sep) else 0,
             chunksize=self.chunksize, dtype=str,
             engine='python', skipinitialspace=True,
             usecols=[0, 1]
@@ -131,6 +164,7 @@ class BaseGeneCorrelationAnalyzer:
 
         chunk_reader = pd.read_csv(
             self.filepath, sep=sep, header=None,
+            skiprows=1 if self._has_header(sep) else 0,
             chunksize=self.chunksize, dtype=str,
             engine='python', skipinitialspace=True
         )

@@ -104,8 +104,8 @@ class GeneSimilarityResourceAllocation:
         Uses positional access — column names are irrelevant.
         """
         chunk = chunk.dropna()
-        chunk = chunk[~chunk.iloc[:, 0].str.contains('nan|None', case=False, na=False)]
-        chunk = chunk[~chunk.iloc[:, 1].str.contains('nan|None', case=False, na=False)]
+        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
+        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         return chunk
 
 
