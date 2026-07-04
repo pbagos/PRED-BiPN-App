@@ -1,6 +1,6 @@
 # PRED-BiPN: Bipartite Network Projection & Backbone Extraction Tool
 
-A scientific tool for network backbone extraction from bipartite networks using 23 distinct methods. No Python installation or setup is required to run it.
+A scientific tool for projecting bipartite data into monopartite networks and for pruning weighted networks down to their statistically significant backbone. It bundles 23 distinct methods and needs no Python installation or setup to run.
 
 ## Quick Start
 
@@ -28,9 +28,9 @@ chmod +x run_app.sh
 
 1. Start the app: double-click `RUN_APP.bat` (Windows) or run `./run_app.sh` (Mac/Linux)
 2. Upload your file in CSV or TSV format
-3. Select a method from the 23 backbone extraction algorithms
-4. Run the analysis by clicking Start
-5. Download the results when the run completes
+3. Select a method from the 23 available algorithms
+4. Set the method's parameters, then click Run Method
+5. Download the results (TSV) when the run completes; for backbone methods you can also Compare Networks to view the original vs filtered network side by side
 
 ## Input File Formats
 
@@ -78,6 +78,21 @@ Gene1,Gene3,0.87
 - Pearson Correlation
 - Spearman Correlation
 - Kendall Correlation
+
+## Parameters & Output
+
+Each method shows only the parameters it needs:
+
+- Similarity methods (Cosine, Jaccard, Adamic-Adar, Resource Allocation): a similarity threshold between 0 and 1. Node pairs scoring below the threshold are dropped.
+- Correlation methods (Pearson, Spearman, Kendall) and Odds Ratio: a significance level alpha (default 0.05) and a multiple-testing correction, Benjamini-Hochberg FDR (default), Bonferroni, or None. Only statistically significant pairs are kept, so these methods do not collapse into a near-complete graph on sparse data.
+- Backbone filters: a significance level, z-score, or threshold appropriate to the method.
+
+Results are written as tab-separated (TSV) files:
+
+- Bipartite projections produce two files, one per node set (for example gene-gene and disease-disease).
+- Similarity methods write `source  target  weight`.
+- Correlation methods write `source  target  <statistic>  p_value`, where the statistic is `pearson_r`, `spearman_rho`, or `kendall_tau`; Odds Ratio writes `source  target  odds_ratio  p_value`.
+- Backbone filters write `source  target  weight` (some add a method-specific column, such as the Disparity Filter's alpha).
 
 ## Troubleshooting
 
