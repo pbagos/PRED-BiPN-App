@@ -25,6 +25,9 @@ build/
 # Temp output files (algorithm results, uploads, generated images)
 backend/tmp/
 backend/sparse_matrix.npz
+backend/*.npz
+backend/backbone_*.tsv
+backend/*_gephi.tsv
 
 # Logs
 *.log

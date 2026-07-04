@@ -8,9 +8,8 @@ import os
 import numpy as np
 import pandas as pd
 from scipy.stats import kendalltau
-from scipy.sparse import lil_matrix, csr_matrix, save_npz
+from scipy.sparse import csr_matrix
 from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
 from pvalue_correction import correct
 import warnings
 import time
@@ -118,138 +117,6 @@ class BaseGeneCorrelationAnalyzer:
         chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         return chunk
 
-    def _process_chunk(self, chunk):
-        """Build a local gene dict from one chunk using positional access."""
-        chunk = self._clean_data(chunk)
-        local = {}
-        for _, row in chunk.iterrows():
-            g1 = str(row.iloc[0]).strip()
-            g2 = str(row.iloc[1]).strip()
-            if not g1 or not g2:
-                continue
-            if g1 not in local:
-                local[g1] = len(local)
-            if g2 not in local:
-                local[g2] = len(local)
-        return local
-
-    def build_mappings(self):
-        """
-        Reads file in chunks, builds gene → int index mappings.
-        Uses positional access (iloc), no predefined column names required.
-        """
-        self._log("Building gene mappings...")
-        self._update_progress(5, "Step 1/4: Building gene mappings...")
-
-        sep          = self._detect_separator()
-        total_lines  = self._count_lines()
-        total_chunks = max(1, total_lines // self.chunksize)
-
-        chunk_reader = pd.read_csv(
-            self.filepath, sep=sep, header=None,
-            skiprows=1 if self._has_header(sep) else 0,
-            chunksize=self.chunksize, dtype=str,
-            engine='python', skipinitialspace=True,
-            usecols=[0, 1]
-        )
-
-        results     = []
-        chunk_count = 0
-
-        for chunk in tqdm(chunk_reader, total=total_chunks, desc="Processing network"):
-            results.append(self._process_chunk(chunk))
-            chunk_count += 1
-            self._update_progress(
-                5 + min(15, int(15 * chunk_count / total_chunks)),
-                f"Mapping chunk {chunk_count}/{total_chunks}..."
-            )
-
-        gene_counter = 0
-        for g_dict in results:
-            for gene in g_dict:
-                if gene not in self.gene_dict:
-                    self.gene_dict[gene] = gene_counter
-                    gene_counter += 1
-
-        self._log(f"Total unique genes: {len(self.gene_dict)}")
-        self._update_progress(20, f"Found {len(self.gene_dict)} unique genes")
-
-    def _build_sparse_chunk(self, chunk):
-        """
-        Build COO triplets from one chunk.
-        Uses iloc[0], iloc[1], iloc[2], positional, no column names.
-        """
-        chunk = self._clean_data(chunk)
-        rows, cols, data = [], [], []
-
-        for _, row in chunk.iterrows():
-            g1 = str(row.iloc[0]).strip()
-            g2 = str(row.iloc[1]).strip()
-
-            try:
-                weight = float(row.iloc[2]) if len(row) > 2 else 1.0
-            except (ValueError, TypeError):
-                weight = 1.0
-
-            if not g1 or not g2:
-                continue
-            try:
-                rows.append(self.gene_dict[g1])
-                cols.append(self.gene_dict[g2])
-                data.append(weight)
-            except KeyError:
-                continue
-
-        return rows, cols, data
-
-    def construct_sparse_matrix(self):
-        """
-        Constructs the gene × gene weighted sparse matrix.
-        Uses positional access (iloc), no predefined column names required.
-        """
-        self._log("Constructing gene-gene sparse matrix...")
-        self._update_progress(25, "Step 2/4: Constructing sparse matrix...")
-
-        sep          = self._detect_separator()
-        total_lines  = self._count_lines()
-        total_chunks = max(1, total_lines // self.chunksize)
-
-        chunk_reader = pd.read_csv(
-            self.filepath, sep=sep, header=None,
-            skiprows=1 if self._has_header(sep) else 0,
-            chunksize=self.chunksize, dtype=str,
-            engine='python', skipinitialspace=True
-        )
-
-        all_rows, all_cols, all_data = [], [], []
-        chunk_count = 0
-
-        for chunk in tqdm(chunk_reader, total=total_chunks, desc="Building matrix"):
-            r, c, d = self._build_sparse_chunk(chunk)
-            all_rows.extend(r)
-            all_cols.extend(c)
-            all_data.extend(d)
-            chunk_count += 1
-            self._update_progress(
-                25 + min(15, int(15 * chunk_count / total_chunks)),
-                f"Matrix chunk {chunk_count}/{total_chunks}..."
-            )
-
-        if all_rows:
-            n = len(self.gene_dict)
-            temp = csr_matrix((all_data, (all_rows, all_cols)), shape=(n, n))
-            diff = (temp - temp.T).nnz
-            if diff == 0:
-                self._log("Matrix is already symmetric")
-                self.matrix = temp
-            else:
-                self._log(f"Making matrix symmetric (diff={diff})...")
-                self.matrix = (temp + temp.T) / 2
-            self._log(f"Sparse matrix: {self.matrix.shape}, nnz={self.matrix.nnz}")
-            assert self.matrix is not None
-            self._update_progress(40, f"Matrix ready: {self.matrix.shape[0]} genes, {self.matrix.nnz} edges")
-        else:
-            raise ValueError("No valid data found to construct matrix")
 
 def _calculate_kendall_static(args):
     """Kendall tau + p-value between rows of a (possibly non-square) matrix for a
