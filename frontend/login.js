@@ -642,209 +642,29 @@ function showGuideContent() {
             </div>
             <div class="how-to-use-steps">
                 <div class="how-to-use-step"><div class="step-number">1</div><div class="step-content"><h3>Choose a method</h3><p>Click <strong>Bipartite Projections</strong> or <strong>Backbone Extraction</strong> to expand the method list and select one of the 23 available algorithms.</p><div class="step-tip"><strong>Tip:</strong> Projection methods turn a bipartite network into a monopartite one; backbone methods prune a weighted network. The relevant parameter fields appear automatically once a method is selected.</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">2</div><div class="step-content"><h3>Upload your network file</h3><p>Click <strong>Upload file</strong> and select your .csv, .tsv, or .txt file. A preview of the first 10 rows appears automatically.</p><div class="step-tip"><strong>Supported:</strong> 2-column bipartite (Gene → Disease) or 3-column weighted (Source → Target → Weight).</div></div></div>
+                <div class="how-to-use-step"><div class="step-number">2</div><div class="step-content"><h3>Upload your network file</h3><p>Click <strong>Upload file</strong> and select your .csv, .tsv, or .txt file. A preview of the first 10 rows appears automatically.</p><div class="step-tip"><strong>Supported:</strong> 2-column bipartite (node type A → node type B, e.g. gene → disease, author → paper, user → product) or 3-column weighted (Source → Target → Weight).</div></div></div>
                 <div class="how-to-use-step"><div class="step-number">3</div><div class="step-content"><h3>Configure parameters and execute</h3><p>Set the parameters shown for your method, then click <strong>Run Method</strong>.</p><div class="step-tip"><strong>Correlation & odds-ratio methods:</strong> choose a significance level α (default 0.05) and a multiple-testing correction &mdash; Benjamini-Hochberg FDR (default), Bonferroni, or None. <strong>Similarity & salience methods</strong> use a threshold between 0 and 1. Stricter settings keep fewer edges.</div></div></div>
                 <div class="how-to-use-step"><div class="step-number">4</div><div class="step-content"><h3>Compare and download results</h3><p>Once done, <strong>Download Result</strong> (TSV) or <strong>Export as PNG</strong>. For backbone-extraction methods you can also <strong>Compare Networks</strong> to view the original vs filtered network side by side.</p></div></div>
                 <div class="how-to-use-step"><div class="step-number">5</div><div class="step-content"><h3>Reset or start new analysis</h3><p>Use the <strong>Tool</strong> button in the top bar to reset and start fresh.</p></div></div>
             </div>
             <hr style="margin: 2rem 0; border-color: rgba(255,255,255,0.2);">
 
-            <div class="help-main-header">
-                <h1 class="help-main-title">PRED-BiPN: Scientific Documentation</h1>
-            </div>
-
-            <!-- Introduction -->
-            <div class="help-main-section">
-                <h3>⊡ Purpose & Scientific Background</h3>
-                <p>
-                    PRED-BiPN is a scientific software for
-                    network backbone extraction and analysis from bipartite networks. It was
-                    developed in the context of studying multifactorial diseases, where the rapid
-                    advancement of high-throughput techniques in Systems Biology has led to the
-                    accumulation of vast amounts of data, establishing network analysis as a
-                    crucial tool for understanding complex biological systems.
-                </p>
-            </div>
-
-            <!-- Methodology Diagram -->
-            <div class="help-main-section">
-                <h3>⌗ Methodology Workflow</h3>
-                <div class="methodology-diagram">
-                    <img src="network.png" alt="PRED-BiPN Methodology Workflow" class="workflow-image">
-                    <p class="image-caption">Figure: Network Backbone Extraction Workflow</p>
-                </div>
-                <p>
-                    The tool integrates <strong>23 distinct backbone extraction methods</strong>,
-                    categorized into:
-                </p>
-                <div class="methods-grid">
-                    <div class="method-category">
-                        <h4>Statistical Methods</h4>
-                        <ul>
-                            <li>Disparity Filter</li>
-                            <li>Marginal Likelihood Filter</li>
-                            <li>Noise Corrected Filter</li>
-                            <li>Locally Adaptive Network Sparsification Filter</li>
-                            <li>Polya Filter</li>
-                        </ul>
-                    </div>
-                    <div class="method-category">
-                        <h4>Structural Methods</h4>
-                        <ul>
-                            <li>MST (Maximum Spanning Tree)</li>
-                            <li>Edge Betweenness (Girvan-Newman)</li>
-                            <li>High Salience Skeleton</li>
-                            <li>Global Threshold Filter</li>
-                            <li>Modularity Filter</li>
-                        </ul>
-                    </div>
-                    <div class="method-category">
-                        <h4>Hybrid Methods</h4>
-                        <ul>
-                            <li>Doubly Stochastic Filter</li>
-                            <li>Hierarchical Backbone</li>
-                        </ul>
-                    </div>
-                    <div class="method-category">
-                        <h4>Weighted Projection & Similarity</h4>
-                        <ul>
-                            <li>Cosine Similarity</li>
-                            <li>Adamic-Adar Index</li>
-                            <li>Jaccard Similarity</li>
-                            <li>Pearson / Spearman / Kendall Correlation</li>
-                            <li>Resource Allocation</li>
-                            <li>Odds Ratio Weight</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
             <!-- Data Sources -->
             <div class="help-main-section">
                 <h3>⨀ Data Sources</h3>
                 <p>
-                    Method development and validation were performed using data from:
+                    The gene-disease association data used to validate the methods
+                    comes from:
                 </p>
-                <ul>
-                    <li><strong>NHGRI-EBI GWAS Catalog:</strong> Genome-wide association studies with statistically significant associations (p-value &lt; 5×10⁻⁸)</li>
-                    <li><strong>NCBI OMIM (Online Mendelian Inheritance in Man):</strong> Authoritative database for monogenic disorders with expert curation</li>
-                </ul>
+                <p class="citation">
+                    Kontou, P. I., Pavlopoulou, A., Dimou, N. L., Pavlopoulos, G. A., &amp; Bagos, P. G.
+                    (2016). <em>Network analysis of genes and their association with diseases</em>.
+                    Gene, 590(1), 68&ndash;78.
+                    <a href="https://doi.org/10.1016/j.gene.2016.05.044" target="_blank" rel="noopener">https://doi.org/10.1016/j.gene.2016.05.044</a>
+                </p>
                 <p>
-                    The combination of these sources ensures comprehensive coverage of both
-                    multifactorial and monogenic diseases.
+                    The tool is not limited to this dataset &mdash; any bipartite or weighted edge list works.
                 </p>
-            </div>
-
-            <!-- Theoretical Background -->
-            <div class="help-main-section">
-                <h3>⊞ Theoretical Background</h3>
-                <p>
-                    Bipartite networks B = (U, V, E) are characterized by:
-                </p>
-                <ul>
-                    <li>Two distinct node sets U (e.g., genes) and V (e.g., diseases)</li>
-                    <li>Edges connecting only nodes from different sets (E ⊆ U × V)</li>
-                    <li>Support for weighted edge representation</li>
-                </ul>
-                <p>
-                    One-mode projection transforms a bipartite network into a unipartite network,
-                    where two nodes are connected if they share a common neighbor in the original network.
-                </p>
-            </div>
-
-            <!-- Evaluation Metrics -->
-            <div class="help-main-section">
-                <h3>Evaluation Metrics</h3>
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <h4>Density</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h4>Clustering Coefficient</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h4>Modularity</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h4>Diameter</h4>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Biological Applications -->
-            <div class="help-main-section">
-                <h3>⤥ Biological Applications</h3>
-                <div class="apps-grid">
-                    <div class="app-card">
-                        <span class="app-icon">⊺</span>
-                        <h4>Community Detection</h4>
-                        <p>Identification of functional gene groups collaborating in common biological pathways</p>
-                    </div>
-                    <div class="app-card">
-                        <span class="app-icon">↯</span>
-                        <h4>Comorbidity Analysis</h4>
-                        <p>Recognition of diseases sharing common genetic backgrounds</p>
-                    </div>
-                    <div class="app-card">
-                        <span class="app-icon">⌗</span>
-                        <h4>Biomarker Discovery</h4>
-                        <p>Identification of critical hub nodes connecting seemingly unrelated pathologies</p>
-                    </div>
-                    <div class="app-card">
-                        <span class="app-icon">⤚</span>
-                        <h4>Hierarchical Organization</h4>
-                        <p>Construction of DAGs for understanding general/specific relationships</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Key Findings -->
-            <div class="help-main-section">
-                <h3>⊡ Key Findings</h3>
-                <div class="findings-list">
-                    <div class="finding-item">
-                        <span class="finding-marker">⊳</span>
-                        <div>
-                            <strong>Modularity Filter:</strong> Preserves dense community structures - ideal for studying comorbidities
-                        </div>
-                    </div>
-                    <div class="finding-item">
-                        <span class="finding-marker">⊳</span>
-                        <div>
-                            <strong>Polya Filter & MST:</strong> Produce highly sparse, tree-like skeletons - reveal hierarchical relationships
-                        </div>
-                    </div>
-                    <div class="finding-item">
-                        <span class="finding-marker">⊳</span>
-                        <div>
-                            <strong>Disparity Filter:</strong> Retains locally significant connections without undervaluing low-degree nodes
-                        </div>
-                    </div>
-                    <div class="finding-item">
-                        <span class="finding-marker">⊳</span>
-                        <div>
-                            <strong>Doubly Stochastic Filter:</strong> Statistically rigorous but may lead to elongated communication paths
-                        </div>
-                    </div>
-                </div>
-                <p class="conclusion">
-                    <strong>There is no single optimal method for all scenarios.</strong> The choice of algorithm
-                    must be tailored to the specific biological question, whether it aims to detect distinct
-                    functional modules or to identify the core pathways of biological information flow.
-                </p>
-            </div>
-
-            <!-- Selected Bibliography -->
-            <div class="help-main-section">
-                <h3>⌘ Selected Bibliography</h3>
-                <ul class="bibliography-list">
-                    <li>Serrano, M. Á., Boguñá, M., & Vespignani, A. (2009). <em>Extracting the multiscale backbone of complex weighted networks</em>. PNAS, 106(16), 6483–6488.</li>
-                    <li>Dianati, N. (2016). <em>Unwinding the hairball graph: Pruning algorithms for weighted complex networks</em>. Physical Review E, 93, 012304.</li>
-                    <li>Marcaccioli, R., Livan, G. (2019). <em>A Pólya urn approach to information filtering in complex networks</em>. Nature Communications, 10(1), 745.</li>
-                    <li>Girvan, M., & Newman, M. E. J. (2002). <em>Community structure in social and biological networks</em>. PNAS, 99(12), 7821–7826.</li>
-                    <li>Rajeh, S., Savonnet, M., Leclercq, E., & Cherifi, H. (2022). <em>Modularity-based backbone extraction in weighted complex networks</em>. arXiv:2201.12905.</li>
-                    <li>Jo, W. S., Park, J., Luhur, A., Kim, B. J., & Ahn, Y. (2020). <em>Extracting hierarchical backbones from bipartite networks</em>. arXiv:2002.07239.</li>
-                </ul>
             </div>
 
             <!-- Technical Specifications -->

@@ -50,40 +50,40 @@ Gene1,Gene3,0.87
 
 ## Methods Available
 
+The tool groups its 23 methods into two categories, matching the interface.
+
+### Bipartite Projections
+- Hypergraph Projection
+- Odds Ratio Weighted Projection
+- Cosine Similarity Weighted Projection
+- Adamic Adar Similarity Weighted Projection
+- Resource Allocation Similarity Weighted Projection
+- Jaccard Similarity Weighted Projection
+- Kendall Correlation Weighted Projection
+- Spearman Correlation Weighted Projection
+- Pearson Correlation Weighted Projection
+- Simple Weighted Projection
+- One Mode Projection
+
 ### Backbone Extraction
 - Disparity Filter
 - Doubly Stochastic Filter
 - Hierarchical Backbone
 - High Salience Skeleton
-- Locally Adaptive Network Sparsification (LANS)
-- Marginal Likelihood Filter (MLF)
+- Locally Adaptive Network Sparsification Filter
+- Marginal Likelihood Filter
+- Maximum Spanning Tree Filter
 - Modularity Filter
 - Noise Corrected Filter
-- Polya Filter
-- Maximum Spanning Tree
-- Edge Betweenness (Girvan-Newman)
 - Global Threshold Filter
-
-### Projection Methods
-- One Mode Projection
-- Simple Weighted Projection
-- Odds Ratio Weighted Projection
-- Hypergraph Projection
-
-### Similarity / Correlation
-- Cosine Similarity
-- Adamic-Adar
-- Resource Allocation
-- Jaccard Similarity
-- Pearson Correlation
-- Spearman Correlation
-- Kendall Correlation
+- Edge Betweenness
+- Polya Filter
 
 ## Parameters & Output
 
 Each method shows only the parameters it needs:
 
-- Similarity methods (Cosine, Jaccard, Adamic-Adar, Resource Allocation): a similarity threshold between 0 and 1. Node pairs scoring below the threshold are dropped.
+- Similarity methods: a similarity threshold; node pairs scoring below it are dropped. Cosine and Jaccard are bounded to the 0-1 range, and a value outside it is rejected with an error. Adamic-Adar and Resource Allocation are unbounded (their scores can exceed 1), so any non-negative threshold is allowed.
 - Correlation methods (Pearson, Spearman, Kendall) and Odds Ratio: a significance level alpha (default 0.05) and a multiple-testing correction, Benjamini-Hochberg FDR (default), Bonferroni, or None. Only statistically significant pairs are kept, so these methods do not collapse into a near-complete graph on sparse data.
 - Backbone filters: a significance level, z-score, or threshold appropriate to the method.
 
