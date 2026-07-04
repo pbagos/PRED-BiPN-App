@@ -20,7 +20,6 @@ import gc
 import pandas as pd
 from tqdm import tqdm
 
-
 def brandes_algorithm_worker(sources, adjacency_dict, index_to_node):
     local_betweenness = defaultdict(float)
     for source in sources:
@@ -47,7 +46,6 @@ def brandes_algorithm_worker(sources, adjacency_dict, index_to_node):
                 local_betweenness[edge] += c
                 delta[v] += c
     return local_betweenness
-
 
 class GirvanNewmanOptimized:
 
@@ -195,11 +193,10 @@ class GirvanNewmanOptimized:
         self._log(f"Done in {self.runtime:.2f}s | {len(best_communities)} communities | Q={max_modularity}")
         if progress_callback:
             progress_callback(100)
-            
-        # Retain the network state with the highest modularity for edgelist output
+
         if best_communities:
             self.graph = best_graph
-            
+
         return best_communities if best_communities else current_communities
 
     def visualize_network(self, communities, output_path, show_labels=True, show_edges=True):
@@ -264,7 +261,7 @@ class GirvanNewmanOptimized:
                         f.write(f"{node}\t{comm_size}\t{comm_id}\n")
         except Exception as e:
             self._log(f"Save error: {e}")
-            
+
     def save_edgelist_to_file(self, filename: str):
         """
         Saves the filtered network (remaining edges) as TSV.
@@ -283,15 +280,10 @@ class GirvanNewmanOptimized:
         return [{'id': i + 1, 'size': len(c), 'nodes': sorted(list(c))[:5]}
                 for i, c in enumerate(communities[:20])]
 
-
-# ------------------------------------------------------------------
-# Graph loader — positional access, auto-detect separator, tqdm
-# ------------------------------------------------------------------
 _HEADER_KEYWORDS = {'source', 'target', 'node', 'node1', 'node2', 'gene', 'genes',
                     'gene1', 'gene2', 'disease', 'diseases', 'from', 'to', 'src',
                     'dst', 'protein', 'id', 'name', 'weight', 'score', 'value',
                     'col1', 'col2', 'edge', 'index'}
-
 
 def _detect_separator_from_file(filepath: str) -> str:
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -300,7 +292,6 @@ def _detect_separator_from_file(filepath: str) -> str:
     if ',' in line:   return ','
     if ';' in line:   return ';'
     return r'\s+'
-
 
 def _has_header(filepath: str, sep: str) -> bool:
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -312,16 +303,14 @@ def _has_header(filepath: str, sep: str) -> bool:
         return False
     return all(p.strip().lower() in _HEADER_KEYWORDS for p in parts[:2])
 
-
 def _count_file_lines(filepath: str) -> int:
     with open(filepath, 'r', encoding='utf-8') as f:
         return sum(1 for _ in f)
 
-
 def load_graph_from_file(filepath: str, max_lines: int = 500,
                          chunksize: int = 10000, logger=None) -> nx.Graph:
     """
-    Loads a graph using positional column access (iloc) — no predefined column names.
+    Loads a graph using positional column access (iloc), no predefined column names.
         iloc[0] → source node
         iloc[1] → target node
         iloc[2] → edge weight  (optional; defaults to 1.0)
@@ -345,7 +334,6 @@ def load_graph_from_file(filepath: str, max_lines: int = 500,
     loaded = 0
 
     for chunk in tqdm(chunk_reader, total=total_chunks, desc="Processing network"):
-        # Clean
         chunk = chunk.dropna()
         chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
@@ -371,10 +359,6 @@ def load_graph_from_file(filepath: str, max_lines: int = 500,
         logger.info(f"Loaded {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
 
-
-# ------------------------------------------------------------------
-# Flask entry point
-# ------------------------------------------------------------------
 def run_girvan_newman_analysis(input_file, output_dir, max_lines=500, num_processes=None,
                                early_stopping=True, min_communities=2, max_iterations=10,
                                logger=None, progress_callback=None):
@@ -412,7 +396,7 @@ def run_girvan_newman_analysis(input_file, output_dir, max_lines=500, num_proces
         communities_file = os.path.join(output_dir, f"communities_{task_id}.tsv")
         gn.save_communities_to_file(communities, communities_file)
         results['communities_file'] = os.path.basename(communities_file)
-        
+
         edgelist_file = os.path.join(output_dir, f"result_{task_id}.tsv")
         gn.save_edgelist_to_file(edgelist_file)
         results['result_file'] = os.path.basename(edgelist_file)

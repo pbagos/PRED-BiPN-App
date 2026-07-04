@@ -5,7 +5,7 @@ Weight = number of shared neighbours:
     gene-gene     : weight(g1, g2) = |diseases(g1) ∩ diseases(g2)|
     disease-disease: weight(d1, d2) = |genes(d1) ∩ genes(d2)|
 
-Reads any file format using positional access — no predefined column names:
+Reads any file format using positional access, no predefined column names:
     iloc[0] → gene
     iloc[1] → disease
 
@@ -21,10 +21,6 @@ import pandas as pd
 import psutil
 from tqdm import tqdm
 
-
-# ------------------------------------------------------------------
-# File helpers
-# ------------------------------------------------------------------
 def _detect_separator(filepath: str) -> str:
     """Auto-detects separator from the first line of the file."""
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -37,16 +33,11 @@ def _detect_separator(filepath: str) -> str:
         return ';'
     return r'\s+'
 
-
 def _count_lines(filepath: str) -> int:
-    """Count total lines (header=None — no line subtracted)."""
+    """Count total lines (header=None, no line subtracted)."""
     with open(filepath, 'r', encoding='utf-8') as f:
         return sum(1 for _ in f)
 
-
-# ------------------------------------------------------------------
-# Main class
-# ------------------------------------------------------------------
 class OneModeProjectionSparse:
     """
     Simple weighted one-mode projection from a bipartite gene-disease file.
@@ -69,20 +60,16 @@ class OneModeProjectionSparse:
         self.disease_to_genes: defaultdict = defaultdict(set)
         self.total_rows = 0
 
-    # ------------------------------------------------------------------
     def _log(self, message, level='info'):
         if self.logger:
             getattr(self.logger, level, self.logger.info)(message)
         else:
             print(message)
 
-    # ------------------------------------------------------------------
-    # Step 1 — build mappings
-    # ------------------------------------------------------------------
     def build_mappings(self, progress_callback=None):
         """
         Reads the bipartite file in chunks.
-        Uses positional access (iloc[0], iloc[1]) — no column names needed.
+        Uses positional access (iloc[0], iloc[1]), no column names needed.
         Populates gene_to_diseases and disease_to_genes.
         """
         sep = _detect_separator(self.filepath)
@@ -99,7 +86,6 @@ class OneModeProjectionSparse:
         )
 
         for chunk_idx, chunk in enumerate(tqdm(chunk_reader, total=total_chunks, desc="Processing network")):
-            # Filter out NaN rows
             chunk = chunk[chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna()]
             chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
             chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
@@ -115,8 +101,7 @@ class OneModeProjectionSparse:
             self.total_rows += len(chunk)
             mem = psutil.virtual_memory().percent
             self._log(f"  {self.total_rows} rows processed | Memory: {mem}%")
-            
-            # Progress callback (0-50% for building mappings)
+
             if progress_callback:
                 progress = int((chunk_idx + 1) / total_chunks * 50)
                 progress_callback(progress)
@@ -126,9 +111,6 @@ class OneModeProjectionSparse:
             f"{len(self.disease_to_genes)} diseases, {self.total_rows} rows"
         )
 
-    # ------------------------------------------------------------------
-    # Step 2 — gene-gene edges
-    # ------------------------------------------------------------------
     def compute_gene_edges(self, output_file: str, progress_callback=None) -> int:
         """
         Gene-gene one-mode projection.
@@ -154,8 +136,7 @@ class OneModeProjectionSparse:
                             f.write(f"{g1}\t{g2}\t{len(shared)}\n")
                             written += 1
                         pbar.update(1)
-                    
-                    # Progress callback (50-75% for gene edges)
+
                     if progress_callback and i % 10 == 0:
                         progress = 50 + int((i + 1) / n * 25)
                         progress_callback(progress)
@@ -163,9 +144,6 @@ class OneModeProjectionSparse:
         self._log(f"Gene-gene edges written: {written}")
         return written
 
-    # ------------------------------------------------------------------
-    # Step 3 — disease-disease edges
-    # ------------------------------------------------------------------
     def compute_disease_edges(self, output_file: str, progress_callback=None) -> int:
         """
         Disease-disease one-mode projection.
@@ -191,8 +169,7 @@ class OneModeProjectionSparse:
                             f.write(f"{d1}\t{d2}\t{len(shared)}\n")
                             written += 1
                         pbar.update(1)
-                    
-                    # Progress callback (75-100% for disease edges)
+
                     if progress_callback and i % 10 == 0:
                         progress = 75 + int((i + 1) / n * 25)
                         progress_callback(progress)
@@ -200,9 +177,6 @@ class OneModeProjectionSparse:
         self._log(f"Disease-disease edges written: {written}")
         return written
 
-    # ------------------------------------------------------------------
-    # All-in-one
-    # ------------------------------------------------------------------
     def run(self, node1_output: str, node2_output: str, progress_callback=None) -> dict:
         """
         Runs all steps. Returns stats dict.
@@ -228,10 +202,6 @@ class OneModeProjectionSparse:
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
-
-# ------------------------------------------------------------------
-# Flask helper — maintains compatibility with existing server call
-# ------------------------------------------------------------------
 def run_one_mode_projection(input_file: str,
                             node1_output: str,
                             node2_output: str,
@@ -268,10 +238,6 @@ def run_one_mode_projection(input_file: str,
 
     return stats
 
-
-# ------------------------------------------------------------------
-# Standalone CLI
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
 

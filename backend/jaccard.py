@@ -24,7 +24,6 @@ import gc
 
 warnings.filterwarnings('ignore')
 
-
 class JaccardSimilarityAnalyzer:
 
     def __init__(self, filepath=None, chunksize=10000, logger=None):
@@ -39,9 +38,6 @@ class JaccardSimilarityAnalyzer:
         self.progress_callback = None
         self.total_lines       = None
 
-    # ------------------------------------------------------------------
-    # Logging / progress
-    # ------------------------------------------------------------------
     def log(self, message, level='info'):
         if self.logger:
             getattr(self.logger, level, self.logger.info)(message)
@@ -55,9 +51,6 @@ class JaccardSimilarityAnalyzer:
         if self.progress_callback:
             self.progress_callback(percent)
 
-    # ------------------------------------------------------------------
-    # File helpers
-    # ------------------------------------------------------------------
     def _count_lines(self):
         assert self.filepath is not None
         with open(self.filepath, 'r', encoding='utf-8') as f:
@@ -81,8 +74,8 @@ class JaccardSimilarityAnalyzer:
     def _detect_input_type(self):
         """
         Reads up to 200 rows and decides:
-          'gene_gene'  — col-0 and col-1 share >10% of values (same entity type)
-          'bipartite'  — col-0 and col-1 are disjoint entity sets
+          'gene_gene': col-0 and col-1 share >10% of values (same entity type)
+          'bipartite': col-0 and col-1 are disjoint entity sets
         """
         sep    = self._detect_separator()
         assert self.filepath is not None
@@ -100,9 +93,6 @@ class JaccardSimilarityAnalyzer:
         self.log(f"Input type: {itype}  (overlap {len(overlap)}/{len(col0)})")
         return itype
 
-    # ------------------------------------------------------------------
-    # Cleaning — positional access only
-    # ------------------------------------------------------------------
     def _clean_data(self, chunk):
         chunk = chunk.dropna()
         chunk = chunk[~chunk.iloc[:, 0].astype(str).str.contains(
@@ -111,9 +101,6 @@ class JaccardSimilarityAnalyzer:
             'nan|None', case=False, na=False)]
         return chunk
 
-    # ------------------------------------------------------------------
-    # BIPARTITE path
-    # ------------------------------------------------------------------
     def build_mappings_bipartite(self):
         self.log("Building gene & disease mappings (bipartite)...")
         self.update_progress(5)
@@ -123,7 +110,7 @@ class JaccardSimilarityAnalyzer:
         gene_counter = disease_counter = chunk_count = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,  # type: ignore[arg-type]
+            pd.read_csv(self.filepath, sep=sep, header=None,
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -158,7 +145,7 @@ class JaccardSimilarityAnalyzer:
         chunk_count  = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,  # type: ignore[arg-type]
+            pd.read_csv(self.filepath, sep=sep, header=None,
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -188,9 +175,6 @@ class JaccardSimilarityAnalyzer:
         else:
             raise ValueError("No valid data found to construct bipartite matrix")
 
-    # ------------------------------------------------------------------
-    # GENE-GENE path
-    # ------------------------------------------------------------------
     def build_mappings_gene_gene(self):
         self.log("Building gene mappings (gene-gene)...")
         self.update_progress(5)
@@ -200,7 +184,7 @@ class JaccardSimilarityAnalyzer:
         gene_counter = chunk_count = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,  # type: ignore[arg-type]
+            pd.read_csv(self.filepath, sep=sep, header=None,
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -233,7 +217,7 @@ class JaccardSimilarityAnalyzer:
         chunk_count  = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,  # type: ignore[arg-type]
+            pd.read_csv(self.filepath, sep=sep, header=None,
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True),
             total=total_chunks, desc="Building matrix"
@@ -268,9 +252,6 @@ class JaccardSimilarityAnalyzer:
         else:
             raise ValueError("No valid data found to construct gene-gene matrix")
 
-    # ------------------------------------------------------------------
-    # Jaccard  (shared for both paths)
-    # ------------------------------------------------------------------
     def compute_jaccard_similarity(self, mode='gene', threshold=0.0):
         """
         Computes Jaccard similarity based on sets of neighbors.
@@ -288,70 +269,60 @@ class JaccardSimilarityAnalyzer:
         else:
             A = self.matrix.copy()
 
-        # Free original matrices to save memory
         self.matrix = None
         gc.collect()
 
-        # Jaccard is based on sets (binary existence of edge), so we binarize the adjacency matrix
         A.data = np.ones_like(A.data)
-        
+
         self.log("Computing intersections (A * A^T)...")
         intersection_matrix = A.dot(A.T)
         intersection_matrix.setdiag(0)
         intersection_matrix.eliminate_zeros()
-        
-        # Array of neighbor counts for each node
+
         degrees = np.array(A.sum(axis=1)).flatten()
-        
+
         del A
         gc.collect()
-        
+
         self.log("Computing Jaccard similarities...")
         coo = intersection_matrix.tocoo()
         del intersection_matrix
         gc.collect()
-        
-        # We only need upper triangle for undirected similarity to avoid double processing
+
         mask = coo.row < coo.col
         row = coo.row[mask]
         col = coo.col[mask]
         inter = coo.data[mask]
         del coo
         gc.collect()
-        
-        # union = |A| + |B| - |A n B|
+
         union = degrees[row] + degrees[col] - inter
-        
+
         sim = np.zeros_like(inter, dtype=float)
         valid = union > 0
         sim[valid] = inter[valid] / union[valid]
-        
-        # Apply threshold
+
         thresh_mask = sim >= threshold
         row = row[thresh_mask]
         col = col[thresh_mask]
         sim = sim[thresh_mask]
-        
-        # Symmetrize the final matrix
+
         rows = np.concatenate([row, col])
         cols = np.concatenate([col, row])
         data = np.concatenate([sim, sim])
-        
+
         n = len(degrees)
         self.similarity_matrix = csr_matrix((data, (rows, cols)), shape=(n, n))
         self.log(f"Non-zero similarities: {self.similarity_matrix.nnz}")
         self.update_progress(90)
         return self.similarity_matrix
 
-    # ------------------------------------------------------------------
-    # Save
-    # ------------------------------------------------------------------
     def save_results(self, output_file, mode='gene', batch_size=10000):
         keys = list(self.disease_dict.keys()) if mode == 'disease' \
                else list(self.gene_dict.keys())
         self.log(f"Saving → {output_file}")
         assert self.similarity_matrix is not None
-        coo = self.similarity_matrix.tocoo()  # type: ignore[union-attr]
+        coo = self.similarity_matrix.tocoo()
 
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("source\ttarget\tweight\n")
@@ -369,9 +340,6 @@ class JaccardSimilarityAnalyzer:
         self.log("Results saved.")
         self.update_progress(100)
 
-    # ------------------------------------------------------------------
-    # run_analysis  — auto-detects and routes
-    # ------------------------------------------------------------------
     def run_analysis(self, input_file, output_file, mode='gene', threshold=0.0):
         import psutil
         start = time.time()
@@ -403,7 +371,7 @@ class JaccardSimilarityAnalyzer:
 
             elapsed = time.time() - start
             assert self.similarity_matrix is not None
-            n_sim   = self.similarity_matrix.shape[0]  # type: ignore[union-attr]
+            n_sim   = self.similarity_matrix.shape[0]
             max_p   = n_sim * (n_sim - 1) / 2 or 1
             density = (self.similarity_matrix.nnz / 2) / max_p
 
@@ -428,10 +396,6 @@ class JaccardSimilarityAnalyzer:
             import traceback; traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
-
-# ------------------------------------------------------------------
-# Flask helper
-# ------------------------------------------------------------------
 def run_jaccard_analysis(input_file, output_dir, mode='gene', threshold=0.0,
                          chunksize=10000, logger=None, progress_callback=None):
     task_id         = str(uuid.uuid4())
@@ -444,10 +408,6 @@ def run_jaccard_analysis(input_file, output_dir, mode='gene', threshold=0.0,
     stats = analyzer.run_analysis(input_file, output_filename, mode=mode, threshold=threshold)
     return stats, output_filename
 
-
-# ------------------------------------------------------------------
-# CLI
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse, psutil
     parser = argparse.ArgumentParser(description='Jaccard Similarity Analysis')

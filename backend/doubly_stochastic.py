@@ -5,7 +5,6 @@ from scipy.sparse import coo_matrix, csr_matrix
 from collections import defaultdict
 from tqdm import tqdm
 
-
 class TrueMultiscaleBackbone:
     def __init__(self, max_iter=200, tol=1e-6, smoothing_power=2,
                  significance_level=0.05, sparsity_adjustment=True,
@@ -134,18 +133,15 @@ class TrueMultiscaleBackbone:
 
         print("Loading network...")
         try:
-            # Ανίχνευση διαχωριστικού
             sep = self._detect_separator(edge_list_path)
 
-            # header=0: η πρώτη γραμμή γίνεται αυτόματα ονόματα στηλών
             df = pd.read_csv(edge_list_path, sep=sep, header=0, nrows=nrows)
             print(f"  Columns detected: {list(df.columns)}")
 
             if df.empty:
-                print(f"  Προειδοποίηση: Το αρχείο είναι κενό.")
+                print(f"  Warning: The file is empty.")
                 return nx.DiGraph()
 
-            # Μετονομασία positional — ανεξάρτητα από τα ονόματα στηλών
             df = df.rename(columns={
                 df.columns[0]: 'source',
                 df.columns[1]: 'target',
@@ -157,21 +153,21 @@ class TrueMultiscaleBackbone:
             df = df[df['source'] != df['target']]
 
             if df.empty:
-                print("  Προειδοποίηση: Δεν βρέθηκαν έγκυρες ακμές.")
+                print("  Warning: No valid edges found.")
                 return nx.DiGraph()
 
         except FileNotFoundError:
-            print(f"Σφάλμα: Το αρχείο δεν βρέθηκε: '{edge_list_path}'")
+            print(f"Error: File not found: '{edge_list_path}'")
             return nx.DiGraph()
         except Exception as e:
-            print(f"Σφάλμα κατά την ανάγνωση: {e}")
+            print(f"Error while reading: {e}")
             return nx.DiGraph()
 
         nodes = sorted(set(df['source']) | set(df['target']))
         node_to_idx = {n: i for i, n in enumerate(nodes)}
 
         if not nodes:
-            print("  Προειδοποίηση: Δεν βρέθηκαν κόμβοι.")
+            print("  Warning: No nodes found.")
             return nx.DiGraph()
 
         sparse_matrix = coo_matrix(
@@ -184,7 +180,7 @@ class TrueMultiscaleBackbone:
         print(f"Network: {len(nodes)} nodes, {sparse_matrix.nnz} edges")
 
         if sparse_matrix.nnz == 0:
-            print("Προειδοποίηση: Ο sparse matrix είναι κενός.")
+            print("Warning: The sparse matrix is empty.")
             return nx.DiGraph()
 
         print("Normalizing matrix...")
@@ -198,7 +194,6 @@ class TrueMultiscaleBackbone:
         print(f"  Edges: {backbone.number_of_edges()}")
         print(f"  Strongly connected: {nx.is_strongly_connected(backbone)}")
 
-        # Αποθήκευση ως CSV με στήλες source, target, weight
         rows = []
         for u, v, data in backbone.edges(data=True):
             rows.append({'source': u, 'target': v, 'weight': data.get('weight', 1.0)})
@@ -208,7 +203,6 @@ class TrueMultiscaleBackbone:
         print(f"  Saved to {output_path}")
 
         return backbone
-
 
 if __name__ == "__main__":
     extractor = TrueMultiscaleBackbone()

@@ -8,7 +8,6 @@ from multiprocessing import Pool, cpu_count
 
 warnings.filterwarnings("ignore")
 
-
 def _filter_rows_batch(args):
     """Module-level worker: filter a batch of (u, v, weight) rows."""
     rows, strength, degree, alpha_val = args
@@ -28,7 +27,6 @@ def _filter_rows_batch(args):
         if aij < alpha_val:
             results.append((u, v, weight, aij))
     return results
-
 
 class DisparityFilter:
     """
@@ -110,7 +108,7 @@ class DisparityFilter:
         return strength, degree
 
     def run(self, input_file, output_file, progress_callback=None):
-        """Main entry point — called from Flask server."""
+        """Main entry point, called from Flask server."""
         print(f"\n=== Disparity Filter ===")
         print(f"Input: {input_file}, Alpha: {self.alpha}")
 
@@ -118,19 +116,16 @@ class DisparityFilter:
         sample = pd.read_csv(input_file, sep=sep, header=0, nrows=1)
         print(f"  Columns detected: {list(sample.columns)}")
 
-        # Pass 1: node strengths and degrees
         strength, degree = self._calculate_network_stats(input_file, sep)
         print(f"  Found {len(degree):,} nodes")
 
         if progress_callback:
             progress_callback(50)
 
-        # Pass 2: load all edges then filter (parallel-friendly)
         print(f"  Applying disparity filter ({self.n_workers} worker(s))...")
         with open(input_file) as f:
             total_rows = sum(1 for line in f) - 1
 
-        # Read all edge rows into memory for parallel processing
         all_rows = []
         chunk_reader = pd.read_csv(input_file, sep=sep, header=0,
                                    chunksize=self.chunksize)
@@ -148,7 +143,6 @@ class DisparityFilter:
         if psutil.virtual_memory().percent > 90:
             warnings.warn("High memory usage! Consider reducing chunksize.")
 
-        # Split into batches and filter in parallel
         batch_size = max(1000, len(all_rows) // max(1, self.n_workers * 4))
         batches = [
             (all_rows[k:k + batch_size], strength, degree, self.alpha)
@@ -176,13 +170,11 @@ class DisparityFilter:
 
         print(f"  Saved to: {output_file}")
 
-
 def run_disparity_filter(input_file, output_file, alpha=0.05,
                          chunksize=100000, n_workers=1, progress_callback=None):
     """Compatibility function for Flask server."""
     df = DisparityFilter(alpha=alpha, chunksize=chunksize, n_workers=n_workers)
     df.run(input_file, output_file, progress_callback=progress_callback)
-
 
 if __name__ == "__main__":
     import sys

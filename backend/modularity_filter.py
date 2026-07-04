@@ -8,7 +8,6 @@ import numpy as np
 from scipy import sparse
 from tqdm import tqdm
 
-
 class SparseModularityBackbone:
     def __init__(self, G):
         self.original_G = G.copy()
@@ -139,8 +138,8 @@ class SparseModularityBackbone:
         print(f"Extracting backbone with target size {target_size} nodes...")
         pbar = tqdm(total=self.n_nodes - target_size)
 
-        while self.adj_matrix.nnz > 0 and len(self.partition) > target_size:  # type: ignore[arg-type]
-            vitals = {n: self.compute_vitality(n) for n in list(self.partition.keys())}  # type: ignore[union-attr]
+        while self.adj_matrix.nnz > 0 and len(self.partition) > target_size:
+            vitals = {n: self.compute_vitality(n) for n in list(self.partition.keys())}
             if not vitals:
                 break
             min_node = min(vitals.keys(), key=lambda x: abs(vitals[x]))
@@ -148,14 +147,12 @@ class SparseModularityBackbone:
             pbar.update(1)
 
         pbar.close()
-        remaining_nodes = list(self.partition.keys())  # type: ignore[union-attr]
+        remaining_nodes = list(self.partition.keys())
         backbone = self.G.subgraph(remaining_nodes).copy()
 
-        remaining_nodes = list(self.partition.keys())  # type: ignore[union-attr]
+        remaining_nodes = list(self.partition.keys())
         backbone = self.G.subgraph(remaining_nodes).copy()
         return backbone
-            
-
 
 def load_graph_sparse(file_path, max_lines=None):
     """
@@ -163,7 +160,6 @@ def load_graph_sparse(file_path, max_lines=None):
     Always uses positional access: iloc[0]=source, iloc[1]=target, iloc[2]=weight.
     Header row (if present) is used as column names, never as data.
     """
-    # Ανίχνευση διαχωριστικού
     with open(file_path, 'r') as f:
         first_line = f.readline().strip()
     separators = {'\t': first_line.count('\t'), ',': first_line.count(','),
@@ -172,24 +168,18 @@ def load_graph_sparse(file_path, max_lines=None):
     if separators[sep] == 0:
         sep = '\t'
 
-    # Διάβασμα με header=0 — η πρώτη γραμμή γίνεται ονόματα, δεν μπαίνει ως δεδομένο
     df = pd.read_csv(file_path, sep=sep, header=0,
                      nrows=max_lines if max_lines else None)
     print(f"  Columns detected: {list(df.columns)}")
     print(f"  Loaded {len(df)} rows")
 
-    # Μετατροπή βάρους positional
     if df.shape[1] > 2:
         df.iloc[:, 2] = pd.to_numeric(df.iloc[:, 2], errors='coerce')
-        #df = df.dropna(subset=[df.columns[2]])
 
     G = nx.Graph()
     for _, row in df.iterrows():
         u = str(row.iloc[0]).strip()
         v = str(row.iloc[1]).strip()
-
-        #if not u or not v or u == 'nan' or v == 'nan' or u == v:
-        #   continue
 
         w = 1.0
         if df.shape[1] > 2 and pd.notna(row.iloc[2]):
@@ -202,14 +192,12 @@ def load_graph_sparse(file_path, max_lines=None):
 
     return G
 
-
 def save_backbone_sparse(backbone, output_file):
     """Save backbone as CSV with columns source, target, weight."""
     rows = [(u, v, d.get('weight', 1.0)) for u, v, d in backbone.edges(data=True)]
     pd.DataFrame(rows, columns=['source', 'target', 'weight']).to_csv(
         output_file, index=False, sep='\t')
     print(f"Backbone saved to {output_file}")
-
 
 class ModularityFilter:
     """Wrapper class for Flask server."""
@@ -244,7 +232,6 @@ class ModularityFilter:
             import traceback
             traceback.print_exc()
             return {'success': False, 'message': str(e)}
-
 
 if __name__ == "__main__":
     import argparse

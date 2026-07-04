@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import os
 
-
 class KruskalMST:
     """
     Kruskal's Maximum Spanning Tree for weighted networks.
@@ -44,7 +43,6 @@ class KruskalMST:
         return maxst_edges
 
     def load_data(self, input_file):
-        # Ανίχνευση διαχωριστικού
         with open(input_file, 'r') as f:
             first_line = f.readline().strip()
 
@@ -56,13 +54,10 @@ class KruskalMST:
 
         nrows = self.test_size if self.test_mode else None
 
-        # header=0: η πρώτη γραμμή γίνεται αυτόματα ονόματα στηλών
-        # ανεξάρτητα από το τι γράφει (Id, Label, source, gene1, κλπ.)
         df = pd.read_csv(input_file, sep=sep, header=0, nrows=nrows)
         print(f"  Columns detected: {list(df.columns)}")
         print(f"  Loaded {len(df)} rows")
 
-        # Μετατροπή 3ης στήλης σε numeric — το header text γίνεται NaN και απορρίπτεται
         if df.shape[1] > 2:
             df.iloc[:, 2] = pd.to_numeric(df.iloc[:, 2], errors='coerce')
             df = df.dropna(subset=[df.columns[2]])
@@ -125,7 +120,6 @@ class KruskalMST:
         print(f"  MST edges: {len(maxst_edges)} (expected {len(nodes)-1})")
         print(f"  Saved to: {output_file}")
         return output_file
-
 
 if __name__ == "__main__":
     import sys

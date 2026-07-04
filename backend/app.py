@@ -18,23 +18,19 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import base64
 
-# Ensure UTF-8 stdout/stderr so module print() calls (e.g. the '×' in matrix
-# logs) don't crash on a non-UTF-8 console when run without PYTHONUTF8=1.
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding='utf-8')
     except (AttributeError, ValueError):
         pass
 
-
-#Methods
 from disparity import run_disparity_filter
 from one_mode_projection_sparse import run_one_mode_projection
 from weighted_projection import run_one_mode_projection as run_weighted_projection
 from doubly_stochastic import TrueMultiscaleBackbone
 from hierarchical_backbone import HierarchicalBackboneExtractor
 from high_salience_skeleton import HighSalienceSkeleton, run_hss
-from hypergraph import Hypergraph 
+from hypergraph import Hypergraph
 from lans import run_lans, LANS, create_lans_extractor
 from mlf import MLFProcessor, run_mlf, create_mlf_processor
 from mst import KruskalMST
@@ -42,7 +38,6 @@ from noise_corrected import NoiseCorrectedBackbone
 from modularity_filter import ModularityFilter
 from odds import OddsRatioCalculator
 from polya import PolyaFilter, create_polya_filter
-# Στην αρχή του αρχείου, με τα άλλα imports
 from cosine import GeneSimilarityCosine, run_gene_similarity_cosine
 from adamic_adar import run_adamic_adar_similarity
 from resource_allocation import run_resource_allocation_similarity
@@ -53,33 +48,25 @@ from pearson import run_pearson_analysis, run_bipartite_pearson_dual
 from edge_betweenness import run_girvan_newman_analysis
 from global_threshold import run_global_threshold
 
-# ==================== FLASK APP INITIALIZATION ====================
-# Setup static folder to serve frontend files
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 app = Flask(__name__, static_folder=frontend_path, static_url_path='')
 
-# Production configuration
 ENV = os.environ.get('FLASK_ENV', 'production')
 DEBUG = ENV == 'development'
 IS_RENDER = os.environ.get('RENDER', False)
 
-
-
-# Upload folder configuration
 if IS_RENDER:
     app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
 else:
     app.config['UPLOAD_FOLDER'] = os.path.abspath('tmp')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# CORS configuration
 if IS_RENDER:
     CORS(app, supports_credentials=True, origins=[
         "https://*.onrender.com"
     ])
 else:
     CORS(app, supports_credentials=True)
-
 
 def normalize_method_name(method_name):
     if not isinstance(method_name, str):
@@ -92,12 +79,8 @@ def normalize_method_name(method_name):
 
     return trimmed_method_name
 
-
-# ==================== TASK STORE (async processing) ====================
-
-task_store = {}       # task_id -> {status, logs, result, error}
+task_store = {}
 task_store_lock = threading.Lock()
-
 
 class TaskLogHandler(logging.Handler):
     """Captures log records for a specific task into task_store."""
@@ -111,7 +94,6 @@ class TaskLogHandler(logging.Handler):
         with task_store_lock:
             if self.task_id in task_store:
                 task_store[self.task_id]['logs'].append(msg)
-
 
 def _execute_processing(data, task_id):
     """Run the full processing pipeline in a background thread."""
@@ -207,10 +189,15 @@ def _execute_processing(data, task_id):
                 gene_content, disease_content = hg.run()
                 col_info = hg.get_column_info()
                 app.logger.info(f"Detected columns: {col_info}")
-                output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
-                with open(output_path, "w") as f:
+                node1_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node1.tsv")
+                node2_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node2.tsv")
+                with open(node1_path, "w", encoding="utf-8") as f:
                     f.write(gene_content)
-                result_files = {"result_file": os.path.basename(output_path)}
+                result_files = {"node1_file": os.path.basename(node1_path)}
+                if disease_content:
+                    with open(node2_path, "w", encoding="utf-8") as f:
+                        f.write(disease_content)
+                    result_files["node2_file"] = os.path.basename(node2_path)
 
             elif method == "Locally Adaptive Network Sparsification Filter":
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
@@ -293,9 +280,7 @@ def _execute_processing(data, task_id):
                 app.logger.info(
                     f"Starting bipartite odds ratio analysis (p<{p_threshold}, OR>{or_threshold})"
                 )
-                # Output 1: pairs of col-0 entities (genes if input is gene\tdisease)
                 output_node1 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node1.tsv")
-                # Output 2: pairs of col-1 entities (diseases if input is gene\tdisease)
                 output_node2 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node2.tsv")
                 calculator = OddsRatioCalculator(chunk_size=20000, batch_size=50000)
                 results = calculator.run_dual_bipartite_analysis(
@@ -345,56 +330,65 @@ def _execute_processing(data, task_id):
 
             elif method.lower() == "cosine similarity weighted projection":
                 threshold = float(data.get('threshold', 0.5))
-                sample_size = int(data.get('sample_size', 1000))
                 app.logger.info(f"Starting Cosine Similarity analysis")
-                stats, output_filename = run_gene_similarity_cosine(
+                stats, type1_out, type2_out = run_gene_similarity_cosine(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, sample_size=sample_size,
+                    threshold=threshold, sample_size=None,
                     logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Cosine similarity failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {}
+                if type1_out and os.path.exists(type1_out):
+                    new1 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                    os.rename(type1_out, new1)
+                    result_files['node1_file'] = os.path.basename(new1)
+                if type2_out and os.path.exists(type2_out):
+                    new2 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                    os.rename(type2_out, new2)
+                    result_files['node2_file'] = os.path.basename(new2)
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "adamic adar similarity weighted projection":
                 threshold = float(data.get('threshold', 0.5))
-                sample_size = int(data.get('sample_size', 1000))
                 app.logger.info(f"Starting Adamic-Adar analysis")
-                stats, output_filename = run_adamic_adar_similarity(
+                stats, type1_out, type2_out = run_adamic_adar_similarity(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, sample_size=sample_size,
+                    threshold=threshold, sample_size=None,
                     logger=app.logger, progress_callback=None, n_workers=cpu_count()
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Adamic-Adar failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {}
+                if type1_out and os.path.exists(type1_out):
+                    new1 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                    os.rename(type1_out, new1)
+                    result_files['node1_file'] = os.path.basename(new1)
+                if type2_out and os.path.exists(type2_out):
+                    new2 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                    os.rename(type2_out, new2)
+                    result_files['node2_file'] = os.path.basename(new2)
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "resource allocation similarity weighted projection":
                 threshold = float(data.get('threshold', 0.5))
-                sample_size = int(data.get('sample_size', 1000))
                 app.logger.info(f"Starting Resource Allocation analysis")
-                stats, output_filename = run_resource_allocation_similarity(
+                stats, type1_out, type2_out = run_resource_allocation_similarity(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, sample_size=sample_size,
+                    threshold=threshold, sample_size=None,
                     logger=app.logger, progress_callback=None, n_workers=cpu_count()
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Resource Allocation failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {}
+                if type1_out and os.path.exists(type1_out):
+                    new1 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                    os.rename(type1_out, new1)
+                    result_files['node1_file'] = os.path.basename(new1)
+                if type2_out and os.path.exists(type2_out):
+                    new2 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                    os.rename(type2_out, new2)
+                    result_files['node2_file'] = os.path.basename(new2)
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "jaccard similarity weighted projection":
@@ -433,33 +427,41 @@ def _execute_processing(data, task_id):
             elif method.lower() == "kendall correlation weighted projection":
                 threshold = float(data.get('threshold', 0.0))
                 chunksize = int(data.get('chunksize', 10000))
-                stats, output_filename = run_kendall_analysis(
+                stats, type1_out, type2_out = run_kendall_analysis(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
                     threshold=threshold, chunksize=chunksize, logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Kendall failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {}
+                if type1_out and os.path.exists(type1_out):
+                    new1 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                    os.rename(type1_out, new1)
+                    result_files['node1_file'] = os.path.basename(new1)
+                if type2_out and os.path.exists(type2_out):
+                    new2 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                    os.rename(type2_out, new2)
+                    result_files['node2_file'] = os.path.basename(new2)
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "spearman correlation weighted projection":
                 threshold = float(data.get('threshold', 0.0))
                 chunksize = int(data.get('chunksize', 10000))
-                stats, output_filename = run_spearman_analysis(
+                stats, type1_out, type2_out = run_spearman_analysis(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
                     threshold=threshold, chunksize=chunksize, logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Spearman failed'))
-                if output_filename and os.path.exists(output_filename):
-                    new_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
-                    os.rename(output_filename, new_path)
-                    output_filename = new_path
-                result_files = {'result_file': os.path.basename(output_filename) if output_filename else 'result.tsv'}
+                result_files = {}
+                if type1_out and os.path.exists(type1_out):
+                    new1 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
+                    os.rename(type1_out, new1)
+                    result_files['node1_file'] = os.path.basename(new1)
+                if type2_out and os.path.exists(type2_out):
+                    new2 = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
+                    os.rename(type2_out, new2)
+                    result_files['node2_file'] = os.path.basename(new2)
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "pearson correlation weighted projection":
@@ -579,17 +581,13 @@ def _execute_processing(data, task_id):
         finally:
             app.logger.removeHandler(handler)
 
-
-# ==================== ROUTES ====================
-
-# --- Upload αρχείου ---
 @app.route('/upload', methods=['POST'])
 def upload_file():
     uploaded_file = request.files.get('file')
     method = request.form.get('method')
 
     if not uploaded_file or not method:
-        return jsonify({'success': False, 'message': 'Αρχείο ή μέθοδος λείπει'}), 400
+        return jsonify({'success': False, 'message': 'Missing file or method'}), 400
 
     filename = f"{uuid.uuid4().hex}_{uploaded_file.filename}"
     path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -597,7 +595,6 @@ def upload_file():
 
     return jsonify({'success': True, 'uploaded_file': filename})
 
-# --- Επεξεργασία αρχείου (async) ---
 @app.route('/process', methods=['POST'])
 def process_file():
     if request.is_json:
@@ -620,14 +617,12 @@ def process_file():
     with task_store_lock:
         task_store[task_id] = {'status': 'running', 'logs': [], 'result': None, 'error': None}
 
-    # Flatten form-data MultiDicts to plain dicts
     data = {k: (v[0] if isinstance(v, list) else v) for k, v in raw.items()} if isinstance(raw, dict) else raw
 
     thread = threading.Thread(target=_execute_processing, args=(data, task_id), daemon=True)
     thread.start()
 
     return jsonify({'success': True, 'task_id': task_id, 'status': 'running'}), 202
-
 
 @app.route('/task_status/<task_id>', methods=['GET'])
 def task_status(task_id):
@@ -642,26 +637,20 @@ def task_status(task_id):
             'error': entry.get('error')
         })
 
-
-# ============================
-# Global Threshold Filter Endpoints
-# ============================
-
 @app.route('/get_file_columns', methods=['GET'])
 def get_file_columns():
     """Detect columns in uploaded file for Global Threshold Filter"""
     filename = request.args.get('filename')
     if not filename:
         return jsonify({'success': False, 'message': 'No filename provided'}), 400
-    
+
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     if not os.path.exists(filepath):
         return jsonify({'success': False, 'message': 'File not found'}), 404
-    
+
     try:
-        # Read first few rows to detect columns
         df = pd.read_csv(filepath, sep=None, engine='python', nrows=10)
-        
+
         columns = []
         for i, col in enumerate(df.columns):
             col_type = 'unknown'
@@ -670,26 +659,25 @@ def get_file_columns():
             else:
                 col_type = 'text'
             columns.append({'index': i, 'name': col, 'type': col_type})
-        
+
         return jsonify({'success': True, 'columns': columns})
-        
+
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
-
 
 @app.route('/detect_columns', methods=['POST'])
 def detect_columns():
     """Upload file and detect columns"""
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': 'No file uploaded'}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({'success': False, 'message': 'No file selected'}), 400
-    
+
     try:
         df = pd.read_csv(file.stream, sep=None, engine='python', nrows=10)
-        
+
         columns = []
         for i, col in enumerate(df.columns):
             col_type = 'unknown'
@@ -698,112 +686,94 @@ def detect_columns():
             else:
                 col_type = 'text'
             columns.append({'index': i, 'name': col, 'type': col_type})
-        
+
         return jsonify({'success': True, 'columns': columns})
-        
+
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
-    
-
-# ============================
-# Visualization Endpoint
-# ============================
 
 @app.route('/visualize/compare', methods=['POST'])
 def compare_networks():
-    """Σύγκριση δύο δικτύων (πριν και μετά) - επιστρέφει δύο ξεχωριστές εικόνες"""
+    """Compare two networks (before and after) - returns two separate images"""
     try:
         data = request.get_json()
         before_file = data.get('before_file')
         after_file = data.get('after_file')
         method = data.get('method')
-        
+
         if not before_file or not after_file:
-            return jsonify({'success': False, 'message': 'Χρειάζονται και τα δύο αρχεία'}), 400
-        
+            return jsonify({'success': False, 'message': 'Both files are required'}), 400
+
         before_path = os.path.join(app.config['UPLOAD_FOLDER'], before_file)
         after_path = os.path.join(app.config['UPLOAD_FOLDER'], after_file)
-        
+
         if not os.path.exists(before_path) or not os.path.exists(after_path):
-            return jsonify({'success': False, 'message': 'Ένα από τα αρχεία δεν βρέθηκε'}), 404
-        
-        # Διάβασμα αρχείων
+            return jsonify({'success': False, 'message': 'One of the files was not found'}), 404
+
         try:
             df_before = pd.read_csv(before_path, sep=None, engine='python')
             df_after = pd.read_csv(after_path, sep=None, engine='python')
         except:
             df_before = pd.read_csv(before_path, sep='\t', engine='python')
             df_after = pd.read_csv(after_path, sep='\t', engine='python')
-        
-        # Δημιουργία γράφων
+
         G_before = nx.Graph()
         G_after = nx.Graph()
-        
-        # Προσθήκη ακμών στο before
+
         for _, row in df_before.iterrows():
             src = str(row.iloc[0])
             tgt = str(row.iloc[1])
             G_before.add_edge(src, tgt)
-        
-        # Προσθήκη ακμών στο after
+
         for _, row in df_after.iterrows():
             src = str(row.iloc[0])
             tgt = str(row.iloc[1])
             G_after.add_edge(src, tgt)
-        
-        # Δημιουργία εικόνας για το before
+
         fig_before, ax_before = plt.subplots(1, 1, figsize=(8, 6))
         if G_before.number_of_nodes() > 0:
             pos_before = nx.spring_layout(G_before, k=1, iterations=30)
             degrees_before = dict(G_before.degree())
             node_colors_before = list(degrees_before.values())
-            
-            # Σκούροι μπλε κόμβοι - χρωματική κλίμακα
+
             nx.draw_networkx_nodes(G_before, pos_before, node_color=node_colors_before,
                                   node_size=50, alpha=0.8, cmap='Blues', ax=ax_before)
-            # Ανοιχτό μπλε ακμές
             nx.draw_networkx_edges(G_before, pos_before, alpha=0.4, edge_color='#7f8c8d', width=1, ax=ax_before)
             ax_before.set_title(f'Original Network\nNodes: {G_before.number_of_nodes()}, Edges: {G_before.number_of_edges()}')
         else:
             ax_before.text(0.5, 0.5, 'No data to display', ha='center', va='center')
         ax_before.axis('off')
-        
-        # Μετατροπή before σε base64
+
         buffer_before = io.BytesIO()
         plt.savefig(buffer_before, format='png', dpi=150, bbox_inches='tight', facecolor='white')
         buffer_before.seek(0)
         image_before_base64 = base64.b64encode(buffer_before.getvalue()).decode()
         plt.close(fig_before)
-        
-        # Δημιουργία εικόνας για το after
+
         fig_after, ax_after = plt.subplots(1, 1, figsize=(8, 6))
         if G_after.number_of_nodes() > 0:
             pos_after = nx.spring_layout(G_after, k=1, iterations=30)
             degrees_after = dict(G_after.degree())
             node_colors_after = list(degrees_after.values())
-            
-            # Σκούροι μπλε κόμβοι - χρωματική κλίμακα
+
             nx.draw_networkx_nodes(G_after, pos_after, node_color=node_colors_after,
                                   node_size=50, alpha=0.8, cmap='Blues', ax=ax_after)
-            # Ανοιχτό μπλε ακμές
             nx.draw_networkx_edges(G_after, pos_after, alpha=0.4, edge_color='#7f8c8d', width=1, ax=ax_after)
             ax_after.set_title(f'Filtered Network\nNodes: {G_after.number_of_nodes()}, Edges: {G_after.number_of_edges()}')
         else:
             ax_after.text(0.5, 0.5, 'No data to display', ha='center', va='center')
         ax_after.axis('off')
-        
-        # Μετατροπή after σε base64
+
         buffer_after = io.BytesIO()
         plt.savefig(buffer_after, format='png', dpi=150, bbox_inches='tight', facecolor='white')
         buffer_after.seek(0)
         image_after_base64 = base64.b64encode(buffer_after.getvalue()).decode()
         plt.close(fig_after)
-        
-        # Υπολογισμός ποσοστού μείωσης
+
         reduction = 0
         if G_before.number_of_edges() > 0:
             reduction = (G_before.number_of_edges() - G_after.number_of_edges()) / G_before.number_of_edges() * 100
-        
+
         return jsonify({
             'success': True,
             'image_before': image_before_base64,
@@ -820,23 +790,18 @@ def compare_networks():
             },
             'reduction': reduction
         })
-        
+
     except Exception as e:
         app.logger.error(f"Comparison error: {str(e)}")
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
 
-
-
-
-# --- Download result file ---
 @app.route('/download', methods=['GET'])
 def download_file():
     filename = request.args.get('file')
     if not filename:
         return jsonify({'success': False, 'message': 'No filename provided'}), 400
 
-    # Sanitize: only allow the basename to prevent path traversal
     filename = os.path.basename(filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
@@ -845,18 +810,13 @@ def download_file():
 
     return send_file(filepath, as_attachment=True, download_name=filename)
 
-
-# Configuration for web deployment
 ENV = os.environ.get('FLASK_ENV', 'production')
 
-
-# --- Serve index page ---
 @app.route('/')
 def serve_index():
     """Serve the frontend index page"""
     return send_file(os.path.join(frontend_path, 'login.html'))
 
-# --- Run server ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5050))
     app.run(debug=DEBUG, host='0.0.0.0', port=port)

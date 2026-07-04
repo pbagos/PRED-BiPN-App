@@ -8,7 +8,7 @@
     <title>PRED-BiPN: Bipartite Network Projection Tool</title>
 </head>
 <body>
-    <!-- Help Modal - Comprehensive Scientific Documentation -->
+
     <div id="helpModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -17,24 +17,23 @@
             </div>
             <div class="modal-body">
                 <div class="help-content">
-                    <!-- Introduction -->
+
                     <div class="help-section">
                         <h3>Purpose & Scientific Background</h3>
                         <p>
-                            PRED-BiPN (Bipartite Network Projection Tool) is a scientific software for 
-                            network backbone extraction and analysis from bipartite networks. It was 
-                            developed in the context of studying multifactorial diseases, where the rapid 
-                            advancement of high-throughput techniques in Systems Biology has led to the 
-                            accumulation of vast amounts of data, establishing network analysis as a 
+                            PRED-BiPN (Bipartite Network Projection Tool) is a scientific software for
+                            network backbone extraction and analysis from bipartite networks. It was
+                            developed in the context of studying multifactorial diseases, where the rapid
+                            advancement of high-throughput techniques in Systems Biology has led to the
+                            accumulation of vast amounts of data, establishing network analysis as a
                             crucial tool for understanding complex biological systems.
                         </p>
                     </div>
 
-                    <!-- Methodology & Algorithms -->
                     <div class="help-section">
                         <h3>Methodology & Algorithms</h3>
                         <p>
-                            The tool integrates <strong>23 distinct backbone extraction methods</strong>, 
+                            The tool integrates <strong>23 distinct backbone extraction methods</strong>,
                             categorized into:
                         </p>
                         <ul>
@@ -45,7 +44,6 @@
                         </ul>
                     </div>
 
-                    <!-- Data Sources -->
                     <div class="help-section">
                         <h3>Data Sources</h3>
                         <p>
@@ -56,12 +54,11 @@
                             <li><strong>NCBI OMIM (Online Mendelian Inheritance in Man):</strong> Authoritative database for monogenic disorders with expert curation</li>
                         </ul>
                         <p>
-                            The combination of these sources ensures comprehensive coverage of both 
+                            The combination of these sources ensures comprehensive coverage of both
                             multifactorial and monogenic diseases.
                         </p>
                     </div>
 
-                    <!-- Theoretical Background -->
                     <div class="help-section">
                         <h3>Theoretical Background</h3>
                         <p>
@@ -73,12 +70,11 @@
                             <li>Support for weighted edge representation</li>
                         </ul>
                         <p>
-                            One-mode projection transforms a bipartite network into a unipartite network, 
+                            One-mode projection transforms a bipartite network into a unipartite network,
                             where two nodes are connected if they share a common neighbor in the original network.
                         </p>
                     </div>
 
-                    <!-- Evaluation Metrics -->
                     <div class="help-section">
                         <h3>Evaluation Metrics</h3>
                         <p>
@@ -93,7 +89,6 @@
                         </ul>
                     </div>
 
-                    <!-- Biological Applications -->
                     <div class="help-section">
                         <h3>⚕️ Biological Applications</h3>
                         <p>
@@ -107,7 +102,6 @@
                         </ul>
                     </div>
 
-                    <!-- Key Findings -->
                     <div class="help-section">
                         <h3>📌 Key Findings</h3>
                         <p>
@@ -120,13 +114,12 @@
                             <li><strong>SDSM:</strong> Statistically rigorous but may lead to elongated communication paths</li>
                         </ul>
                         <p>
-                            <strong>There is no single optimal method for all scenarios.</strong> The choice of algorithm 
-                            must be tailored to the specific biological question, whether it aims to detect distinct 
+                            <strong>There is no single optimal method for all scenarios.</strong> The choice of algorithm
+                            must be tailored to the specific biological question, whether it aims to detect distinct
                             functional modules or to identify the core pathways of biological information flow.
                         </p>
                     </div>
 
-                    <!-- Selected Bibliography -->
                     <div class="help-section">
                         <h3>📚 Selected Bibliography</h3>
                         <ul class="bibliography">
@@ -139,7 +132,6 @@
                         </ul>
                     </div>
 
-                    <!-- Technical Specifications -->
                     <div class="help-section">
                         <h3>⚙️ Technical Specifications</h3>
                         <ul>
@@ -156,10 +148,7 @@
             </div>
         </div>
     </div>
-   
 
-    <!-- Top bar -->
-    <!-- Top bar -->
     <div id="topBar" class="top-bar">
         <span class="top-bar-title">
             <img src="o.png" alt="PRED-BiPN Logo" class="logo-icon">
@@ -174,12 +163,11 @@
             <span class="user-icon"></span>
         </div>
     </div>
-    <!-- Background sidebar -->
+
     <div class="sidebar"></div>
 
-    <!-- Main application panel -->
     <div id="mainPanel" class="main-panel">
-        
+
         <div id="methodPanel" class="method-panel">
             <div id="methodDropdownGroup" class="method-dropdown-group">
                 <div class="method-dropdown">
@@ -227,20 +215,17 @@
             <button id="continueBtn" class="panel-button">Run Method</button>
 
             <input type="file" id="fileInput" class="file-input" />
-            
+
             <div id="filePreviewBox" class="file-preview-box"></div>
         </div>
 
-        <!-- Parameter field for alpha -->
         <div id="paramField" class="param-field">
             <label for="alphaInput" class="param-label"> a (significance level):</label>
             <input type="number" id="alphaInput" class="param-input" min="0" max="1" step="0.001" value="0.05" />
         </div>
 
-        <!-- Dynamic per-method parameters (thresholds etc.) — populated by login.js -->
         <div id="dynamicParamsPanel" class="param-field" style="display: none;"></div>
 
-        <!-- Polya Filter Parameters -->
         <div id="polyaPanel" class="global-threshold-panel" style="display: none;">
             <div class="threshold-header">
                 <h4>Polya Filter Parameters</h4>
@@ -271,8 +256,6 @@
             </div>
         </div>
 
-    <!-- ========== ΕΔΩ ΜΠΑΙΝΕΙ ========== -->
-    <!-- Global Threshold Filter Parameters -->
     <div id="globalThresholdPanel" class="global-threshold-panel" style="display: none;">
         <div class="threshold-header">
             <h4>Global Threshold Filter</h4>
@@ -303,13 +286,6 @@
         </div>
     </div>
 
-    <!-- Method Information -->
-    <div id="methodInfoContainer" class="method-info-container">
-        <h3>Method Information</h3>
-        <div id="methodInfoText" class="method-info-text"></div>
-    </div>
-
-        <!-- Processing Panel -->
         <div id="processingPanel" class="processing-panel" style="display: none;">
             <div class="proc-header">
                 <div class="proc-title-row">
@@ -324,7 +300,6 @@
             <div id="terminalOutput" class="terminal-output"></div>
         </div>
 
-        <!-- File download section (when processing completes) -->
         <div id="downloadSection" class="download-section">
             <h3 class="download-title">Processing Complete</h3>
             <p id="downloadMessage"></p>
@@ -335,7 +310,7 @@
             </div>
         </div>
 
-    </div> <!-- Κλείσιμο main-panel -->
+    </div>
 
     <script src="login.js"></script>
 </body>
