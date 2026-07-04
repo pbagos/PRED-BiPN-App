@@ -989,28 +989,17 @@ function showInfoContent() {
             <div class="help-main-section">
                 <h3>Development</h3>
                 <ul class="bibliography-list">
-                    <li><strong>Lead Developer:</strong> &nbsp;</li>
-                    <li><strong>Backend & Algorithms:</strong> &nbsp;</li>
-                    <li><strong>Frontend & UI:</strong> &nbsp;</li>
+                    <li><strong>Efstathios Voulgaris</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</li>
+                    <li><strong>Ioannis Charatsiaris</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</li>
                 </ul>
             </div>
 
             <div class="help-main-section">
-                <h3>Research & Scientific Supervision</h3>
+                <h3>Academic Supervision</h3>
                 <ul class="bibliography-list">
-                    <li><strong>Principal Investigator:</strong> &nbsp;</li>
-                    <li><strong>Scientific Advisor:</strong> &nbsp;</li>
+                    <li><strong>Pantelis Bagos, Professor</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece &mdash; <a href="mailto:pbagos@compgen.org">pbagos@compgen.org</a></li>
+                    <li><strong>Panagiota I. Kontou, Assistant Professor</strong> &mdash; Department of Mathematics, University of Thessaly, 35131 Lamia, Greece &mdash; <a href="mailto:pkontou@uth.gr">pkontou@uth.gr</a></li>
                 </ul>
-            </div>
-
-            <div class="help-main-section">
-                <h3>Acknowledgements</h3>
-                <p>&nbsp;</p>
-            </div>
-
-            <div class="help-main-section">
-                <h3>Institution</h3>
-                <p>&nbsp;</p>
             </div>
 
             <button id="backToToolFromInfoBtn" class="back-to-tool-btn">← Back to Tool</button>
