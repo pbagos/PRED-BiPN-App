@@ -396,6 +396,64 @@ class JaccardSimilarityAnalyzer:
             import traceback; traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
+    def run_dual_bipartite(self, input_file, gene_output, disease_output, threshold=0.0):
+        """Build the incidence matrix ONCE and derive BOTH one-mode projections
+        from it (gene-gene and disease-disease), instead of reading the file twice.
+        For a gene_gene (already one-mode) input only the single projection is
+        written and disease_output is left unwritten.
+        Returns (stats, gene_output, disease_output_or_None)."""
+        start = time.time()
+        self.filepath = input_file
+        try:
+            itype = self._detect_input_type()
+
+            if itype == 'gene_gene':
+                self.log("--- Gene-gene path (single projection) ---")
+                self.build_mappings_gene_gene()
+                self.construct_sparse_matrix_gene_gene()
+                self.compute_jaccard_similarity(mode='gene_gene', threshold=threshold)
+                self.save_results(gene_output, mode='gene')
+                n_gene = self.similarity_matrix.nnz // 2
+                stats = {
+                    'success': True, 'input_type': itype,
+                    'genes': len(self.gene_dict), 'diseases': len(self.disease_dict),
+                    'gene_pairs': n_gene, 'disease_pairs': 0,
+                    'execution_time': round(time.time() - start, 2),
+                    'threshold': threshold, 'method': 'jaccard', 'dual_output': False,
+                }
+                return stats, gene_output, None
+
+            self.log("--- Bipartite path (dual projection, single build) ---")
+            self.build_mappings_bipartite()
+            self.construct_sparse_matrix_bipartite()
+            incidence = self.matrix                 # gene x disease, kept alive locally
+
+            self.matrix = incidence                 # compute_jaccard copies internally
+            self.compute_jaccard_similarity(mode='gene', threshold=threshold)
+            self.save_results(gene_output, mode='gene')
+            n_gene = self.similarity_matrix.nnz // 2
+
+            self.matrix = incidence                 # transpose is a fresh object; original safe
+            self.compute_jaccard_similarity(mode='disease', threshold=threshold)
+            self.save_results(disease_output, mode='disease')
+            n_disease = self.similarity_matrix.nnz // 2
+
+            stats = {
+                'success': True, 'input_type': itype,
+                'genes': len(self.gene_dict), 'diseases': len(self.disease_dict),
+                'gene_pairs': n_gene, 'disease_pairs': n_disease,
+                'execution_time': round(time.time() - start, 2),
+                'threshold': threshold, 'method': 'jaccard', 'dual_output': True,
+            }
+            self.log(f"Done in {stats['execution_time']:.1f}s | "
+                     f"{n_gene} gene pairs, {n_disease} disease pairs")
+            return stats, gene_output, disease_output
+
+        except Exception as e:
+            self.log(f"Error: {e}", 'error')
+            import traceback; traceback.print_exc()
+            return {'success': False, 'error': str(e)}, None, None
+
 def run_jaccard_analysis(input_file, output_dir, mode='gene', threshold=0.0,
                          chunksize=10000, logger=None, progress_callback=None):
     task_id         = str(uuid.uuid4())
@@ -407,6 +465,20 @@ def run_jaccard_analysis(input_file, output_dir, mode='gene', threshold=0.0,
         analyzer.set_progress_callback(progress_callback)
     stats = analyzer.run_analysis(input_file, output_filename, mode=mode, threshold=threshold)
     return stats, output_filename
+
+def run_jaccard_dual_analysis(input_file, output_dir, threshold=0.0,
+                              chunksize=10000, logger=None, progress_callback=None):
+    """Dual Jaccard projection from a single incidence-matrix build.
+    Returns (stats, gene_output, disease_output_or_None)."""
+    task_id       = str(uuid.uuid4())
+    gene_output   = os.path.join(output_dir, f"jaccard_gene_{task_id}.tsv")
+    disease_output = os.path.join(output_dir, f"jaccard_disease_{task_id}.tsv")
+    analyzer = JaccardSimilarityAnalyzer(
+        filepath=input_file, chunksize=chunksize, logger=logger
+    )
+    if progress_callback:
+        analyzer.set_progress_callback(progress_callback)
+    return analyzer.run_dual_bipartite(input_file, gene_output, disease_output, threshold=threshold)
 
 if __name__ == "__main__":
     import argparse, psutil

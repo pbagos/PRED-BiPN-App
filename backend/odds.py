@@ -12,6 +12,7 @@ import logging
 from collections import defaultdict
 import itertools
 from tqdm import tqdm
+from pvalue_correction import correct
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -526,11 +527,17 @@ class OddsRatioCalculator:
 
     def _compute_projection(self, ref_to_nodes, output_file,
                             min_shared=1, min_expected=None,
-                            p_threshold=0.05, or_threshold=1.0):
+                            alpha=0.05, or_threshold=1.0, correction='fdr_bh'):
         """For a given reference->nodes mapping, compute odds-ratio pairs
         between nodes that share references using Fisher's exact test
         (statistically valid for sparse contingency tables, unlike
         chi-square which requires expected cell counts >= 5).
+
+        Significance is decided at `alpha` under the chosen multiple-testing
+        `correction` ('none' | 'fdr_bh' | 'bonferroni'); the `or_threshold`
+        effect-size filter is applied AFTER correction so it never distorts the
+        p-value ranking. Every Fisher test with a defined p-value counts toward
+        the correction's number of tests.
 
         Write 4-column TSV: source  target  odds_ratio  p_value
         `min_expected` is accepted for API compatibility but ignored
@@ -553,33 +560,41 @@ class OddsRatioCalculator:
                 for j in range(i + 1, len(nodes_list)):
                     pair_counts[(ni, nodes_list[j])] += 1
 
+        m = 0            # number of Fisher tests with a defined p-value
+        cand = []        # (n1, n2, or_val, p_val) for p_val < alpha
+        for (n1, n2), a in pair_counts.items():
+            if a < min_shared:
+                continue
+            b = node_counts[n1] - a
+            c = node_counts[n2] - a
+            d = total_refs - (a + b + c)
+            if b < 0 or c < 0 or d < 0:
+                continue
+            try:
+                _res = fisher_exact([[a, b], [c, d]], alternative='two-sided')
+                p_val = float(_res[1])
+            except Exception as e:
+                logger.warning(f"Skipped pair {n1}-{n2}: {e}")
+                continue
+            if np.isnan(p_val):
+                continue
+            m += 1
+            if p_val < alpha:
+                or_val = ((a + 0.5) * (d + 0.5)) / ((b + 0.5) * (c + 0.5))
+                cand.append((n1, n2, or_val, p_val))
+
+        kept = correct(cand, m, alpha, correction)
+
         os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
         written = 0
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\todds_ratio\tpvalue\n")
-            for (n1, n2), a in pair_counts.items():
-                if a < min_shared:
+            f.write("source\ttarget\todds_ratio\tp_value\n")
+            for n1, n2, or_val, p_val in kept:
+                if or_val <= or_threshold:
                     continue
-                b = node_counts[n1] - a
-                c = node_counts[n2] - a
-                d = total_refs - (a + b + c)
-                if b < 0 or c < 0 or d < 0:
-                    continue
-                try:
-                    _res = fisher_exact(
-                        [[a, b], [c, d]], alternative='two-sided'
-                    )
-                    p_val = float(_res[1])
-                    if np.isnan(p_val):
-                        continue
-                    or_val = ((a + 0.5) * (d + 0.5)) / ((b + 0.5) * (c + 0.5))
-                    if p_val >= p_threshold or or_val <= or_threshold:
-                        continue
-                    f.write(f"{n1}\t{n2}\t{or_val:.6f}\t{p_val:.6e}\n")
-                    written += 1
-                except Exception as e:
-                    logger.warning(f"Skipped pair {n1}-{n2}: {e}")
-        logger.info(f"Wrote {written} pairs to {output_file}")
+                f.write(f"{n1}\t{n2}\t{or_val:.6f}\t{p_val:.6e}\n")
+                written += 1
+        logger.info(f"Wrote {written} pairs to {output_file} (alpha={alpha}, correction={correction}, OR>{or_threshold})")
         return written
 
     def run_dual_bipartite_analysis(self, input_file,
@@ -587,7 +602,8 @@ class OddsRatioCalculator:
                                     col1_pairs_output,
                                     sep=None, encoding='utf-8',
                                     min_shared=1, min_expected=5,
-                                    p_threshold=0.05, or_threshold=1.0,
+                                    alpha=0.05, or_threshold=1.0,
+                                    correction='fdr_bh',
                                     progress_callback=None):
         """Run BOTH projections of a bipartite input in a single pass.
 
@@ -612,7 +628,7 @@ class OddsRatioCalculator:
                 ref_to_nodes=col1_to_col0,
                 output_file=col0_pairs_output,
                 min_shared=min_shared, min_expected=min_expected,
-                p_threshold=p_threshold, or_threshold=or_threshold,
+                alpha=alpha, or_threshold=or_threshold, correction=correction,
             )
             if progress_callback:
                 progress_callback(70)
@@ -621,7 +637,7 @@ class OddsRatioCalculator:
                 ref_to_nodes=col0_to_col1,
                 output_file=col1_pairs_output,
                 min_shared=min_shared, min_expected=min_expected,
-                p_threshold=p_threshold, or_threshold=or_threshold,
+                alpha=alpha, or_threshold=or_threshold, correction=correction,
             )
             if progress_callback:
                 progress_callback(100)

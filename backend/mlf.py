@@ -115,7 +115,7 @@ class MLFProcessor:
 
                 strength[node_index[u]] += w
                 strength[node_index[v]] += w
-                total_weight += w
+                total_weight += w   # T = sum of edge weights W; sum of strengths = 2W. Do NOT halve.
                 edge_count += 1
 
                 if self.test_mode and edge_count >= self.test_size:
@@ -123,7 +123,6 @@ class MLFProcessor:
             if self.test_mode and edge_count >= self.test_size:
                 break
 
-        total_weight /= 2
         strength = np.array(strength, dtype=np.float64)
         self._log(f"  Nodes: {len(node_index)}, Edges: {edge_count}, Total weight: {total_weight:.2f}")
 

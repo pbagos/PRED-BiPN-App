@@ -9,16 +9,22 @@ const ALPHA_METHODS = [
     'marginal likelihood filter'
 ];
 
+function CORRECTION_PARAM() {
+    return { key: 'correction', label: 'Multiple-testing correction', type: 'select', value: 'fdr_bh',
+             options: [['fdr_bh', 'Benjamini-Hochberg FDR'], ['bonferroni', 'Bonferroni'], ['none', 'None (raw p-value)']] };
+}
+
 const METHOD_PARAMS = {
     'cosine similarity weighted projection':            [{ key: 'threshold', label: 'Similarity threshold (0–1)', value: 0.5, min: 0, max: 1, step: 0.01 }],
     'adamic adar similarity weighted projection':       [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
     'resource allocation similarity weighted projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
     'jaccard similarity weighted projection':           [{ key: 'threshold', label: 'Jaccard threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
-    'kendall correlation weighted projection':          [{ key: 'threshold', label: 'Correlation threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
-    'spearman correlation weighted projection':         [{ key: 'threshold', label: 'Correlation threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
-    'pearson correlation weighted projection':          [{ key: 'threshold', label: 'p-value threshold', value: 0.05, min: 0, max: 1, step: 0.001 }],
+    'kendall correlation weighted projection':          [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
+    'spearman correlation weighted projection':         [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
+    'pearson correlation weighted projection':          [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
     'odds ratio weighted projection': [
-        { key: 'p_threshold',  label: 'p-value threshold', value: 0.05, min: 0, max: 1, step: 0.001 },
+        CORRECTION_PARAM(),
+        { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 },
         { key: 'or_threshold', label: 'Odds ratio threshold', value: 1.0, min: 0, step: 0.1 }
     ],
     'high salience skeleton':  [{ key: 'threshold', label: 'Salience threshold (0–1)', value: 0.9, min: 0, max: 1, step: 0.01 }],
@@ -37,11 +43,18 @@ function renderDynamicParams(method) {
         panel.innerHTML = '';
         return;
     }
-    panel.innerHTML = specs.map(s =>
-        `<label class="param-label" for="dp_${s.key}">${s.label}:</label>` +
-        `<input type="number" id="dp_${s.key}" class="param-input" value="${s.value}"` +
-        `${s.min != null ? ` min="${s.min}"` : ''}${s.max != null ? ` max="${s.max}"` : ''} step="${s.step || 'any'}" />`
-    ).join('');
+    panel.innerHTML = specs.map(s => {
+        const lbl = `<label class="param-label" for="dp_${s.key}">${s.label}:</label>`;
+        if (s.type === 'select') {
+            const opts = s.options.map(([v, t]) =>
+                `<option value="${v}"${v === s.value ? ' selected' : ''}>${t}</option>`
+            ).join('');
+            return lbl + `<select id="dp_${s.key}" class="param-input">${opts}</select>`;
+        }
+        return lbl +
+            `<input type="number" id="dp_${s.key}" class="param-input" value="${s.value}"` +
+            `${s.min != null ? ` min="${s.min}"` : ''}${s.max != null ? ` max="${s.max}"` : ''} step="${s.step || 'any'}" />`;
+    }).join('');
     panel.style.display = 'block';
 }
 
@@ -51,7 +64,10 @@ function collectDynamicParams(method) {
     if (!specs) return out;
     for (const s of specs) {
         const el = document.getElementById('dp_' + s.key);
-        if (el && el.value !== '' && !isNaN(parseFloat(el.value))) {
+        if (!el) continue;
+        if (s.type === 'select') {
+            out[s.key] = el.value;
+        } else if (el.value !== '' && !isNaN(parseFloat(el.value))) {
             out[s.key] = parseFloat(el.value);
         }
     }
@@ -385,6 +401,19 @@ continueBtn.addEventListener('click', async () => {
 
         Object.assign(requestData, collectDynamicParams(selectedMethod));
 
+        const bounded01 = ['cosine similarity weighted projection', 'jaccard similarity weighted projection'];
+        if (bounded01.includes((selectedMethod || '').toLowerCase())) {
+            const t = requestData.threshold;
+            if (t == null || isNaN(t) || t < 0 || t > 1) {
+                clearFieldErrors();
+                showFieldError('dp_threshold', 'Threshold must be between 0 and 1.');
+                continueBtn.disabled = false;
+                continueBtn.textContent = 'Run Method';
+                if (processingPanel) processingPanel.style.display = 'none';
+                return;
+            }
+        }
+
         window.currentMethod = selectedMethod;
 
         const startResp = await fetch(`${API_BASE}/process`, {
@@ -612,10 +641,10 @@ function showGuideContent() {
                 <p>How to use PRED-BiPN &amp; Scientific Background</p>
             </div>
             <div class="how-to-use-steps">
-                <div class="how-to-use-step"><div class="step-number">1</div><div class="step-content"><h3>Choose a method</h3><p>Click <strong>Bipartite Projections</strong> or <strong>Backbone Extraction</strong> to expand the method list and select one of the 23 available algorithms.</p><div class="step-tip"><strong>Tip:</strong> Method information appears automatically below the parameters once a method is selected.</div></div></div>
+                <div class="how-to-use-step"><div class="step-number">1</div><div class="step-content"><h3>Choose a method</h3><p>Click <strong>Bipartite Projections</strong> or <strong>Backbone Extraction</strong> to expand the method list and select one of the 23 available algorithms.</p><div class="step-tip"><strong>Tip:</strong> Projection methods turn a bipartite network into a monopartite one; backbone methods prune a weighted network. The relevant parameter fields appear automatically once a method is selected.</div></div></div>
                 <div class="how-to-use-step"><div class="step-number">2</div><div class="step-content"><h3>Upload your network file</h3><p>Click <strong>Upload file</strong> and select your .csv, .tsv, or .txt file. A preview of the first 10 rows appears automatically.</p><div class="step-tip"><strong>Supported:</strong> 2-column bipartite (Gene → Disease) or 3-column weighted (Source → Target → Weight).</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">3</div><div class="step-content"><h3>Configure parameters and execute</h3><p>Adjust parameters (e.g., significance level α), then click <strong>Run Method</strong>.</p><div class="step-tip"><strong>Default α = 0.05.</strong> Lower α → stricter filter → fewer edges.</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">4</div><div class="step-content"><h3>Compare and download results</h3><p>Once done: <strong>Compare Networks</strong> (original vs filtered), <strong>Download Result</strong> (TSV), or <strong>Export as PNG</strong>.</p></div></div>
+                <div class="how-to-use-step"><div class="step-number">3</div><div class="step-content"><h3>Configure parameters and execute</h3><p>Set the parameters shown for your method, then click <strong>Run Method</strong>.</p><div class="step-tip"><strong>Correlation & odds-ratio methods:</strong> choose a significance level α (default 0.05) and a multiple-testing correction &mdash; Benjamini-Hochberg FDR (default), Bonferroni, or None. <strong>Similarity & salience methods</strong> use a threshold between 0 and 1. Stricter settings keep fewer edges.</div></div></div>
+                <div class="how-to-use-step"><div class="step-number">4</div><div class="step-content"><h3>Compare and download results</h3><p>Once done, <strong>Download Result</strong> (TSV) or <strong>Export as PNG</strong>. For backbone-extraction methods you can also <strong>Compare Networks</strong> to view the original vs filtered network side by side.</p></div></div>
                 <div class="how-to-use-step"><div class="step-number">5</div><div class="step-content"><h3>Reset or start new analysis</h3><p>Use the <strong>Tool</strong> button in the top bar to reset and start fresh.</p></div></div>
             </div>
             <hr style="margin: 2rem 0; border-color: rgba(255,255,255,0.2);">
@@ -654,8 +683,8 @@ function showGuideContent() {
                         <ul>
                             <li>Disparity Filter</li>
                             <li>Marginal Likelihood Filter</li>
-                            <li>Noise Corrected Filter3</li>
-                            <li>Locally Adaptive Network Sparsifcation Filter</li>
+                            <li>Noise Corrected Filter</li>
+                            <li>Locally Adaptive Network Sparsification Filter</li>
                             <li>Polya Filter</li>
                         </ul>
                     </div>
@@ -794,7 +823,7 @@ function showGuideContent() {
                     <div class="finding-item">
                         <span class="finding-marker">⊳</span>
                         <div>
-                            <strong>SDSM:</strong> Statistically rigorous but may lead to elongated communication paths
+                            <strong>Doubly Stochastic Filter:</strong> Statistically rigorous but may lead to elongated communication paths
                         </div>
                     </div>
                 </div>
@@ -1179,10 +1208,12 @@ async function showInlineComparison(beforeFile, afterFile, method) {
                 metricsBefore.innerHTML = `
                     <div class="metric-item">
                         <span class="metric-symbol">ω</span>
+                        <span class="metric-label">Density</span>
                         <span class="metric-value">${data.stats_before.density.toFixed(4)}</span>
                     </div>
                     <div class="metric-item">
                         <span class="metric-symbol">δ</span>
+                        <span class="metric-label">Edges / node</span>
                         <span class="metric-value">${(data.stats_before.edges / data.stats_before.nodes).toFixed(2)}</span>
                     </div>
                 `;
@@ -1192,10 +1223,12 @@ async function showInlineComparison(beforeFile, afterFile, method) {
                 metricsAfter.innerHTML = `
                     <div class="metric-item">
                         <span class="metric-symbol">ω</span>
+                        <span class="metric-label">Density</span>
                         <span class="metric-value">${data.stats_after.density.toFixed(4)}</span>
                     </div>
                     <div class="metric-item">
                         <span class="metric-symbol">δ</span>
+                        <span class="metric-label">Edges / node</span>
                         <span class="metric-value">${(data.stats_after.edges / data.stats_after.nodes).toFixed(2)}</span>
                     </div>
                 `;

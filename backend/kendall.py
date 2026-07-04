@@ -11,6 +11,7 @@ from scipy.stats import kendalltau
 from scipy.sparse import lil_matrix, csr_matrix, save_npz
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+from pvalue_correction import correct
 import warnings
 import time
 import uuid
@@ -106,10 +107,13 @@ class BaseGeneCorrelationAnalyzer:
 
     def _clean_data(self, chunk):
         """
-        Drop NaN rows and rows where col-0 or col-1 contain 'nan'/'None'.
-        Uses iloc so it works regardless of column names.
+        Drop rows where iloc[0] or iloc[1] are NaN or literally 'nan'/'None'.
+        Only inspects the first two columns, trailing separators or extra
+        all-NaN columns must not cause every row to be dropped.
         """
-        chunk = chunk.dropna()
+        if chunk.shape[1] < 2:
+            return chunk.iloc[0:0]
+        chunk = chunk[chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna()]
         chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         return chunk
@@ -248,28 +252,30 @@ class BaseGeneCorrelationAnalyzer:
             raise ValueError("No valid data found to construct matrix")
 
 def _calculate_kendall_static(args):
-    """Compute Kendall tau between rows of a (possibly non-square) matrix
-    for a batch of row-index pairs."""
+    """Kendall tau + p-value between rows of a (possibly non-square) matrix for a
+    batch of row-index pairs. Returns (n_valid, edges): n_valid counts pairs with a
+    defined tau/p-value, edges holds (i, j, tau, p) only for p < alpha (the only
+    pairs that can survive Benjamini-Hochberg given m total tests)."""
     from scipy.sparse import csr_matrix as _csr
-    matrix_data, gene_pairs, threshold = args
+    matrix_data, gene_pairs, alpha = args
     shape, data, indices, indptr = matrix_data
     matrix = _csr((data, indices, indptr), shape=shape)
 
-    results = []
+    n_valid = 0
+    edges = []
     for i, j in gene_pairs:
         vec_i = matrix.getrow(i).toarray()[0]
         vec_j = matrix.getrow(j).toarray()[0]
         try:
-            _kt = kendalltau(vec_i, vec_j)
-            corr_val = float(_kt[0])
-            if np.isnan(corr_val):
-                continue
-            if abs(corr_val) < threshold:
-                continue
-            results.append((i, j, corr_val))
+            tau, pval = kendalltau(vec_i, vec_j)
         except Exception:
             continue
-    return results
+        if np.isnan(tau) or np.isnan(pval):
+            continue
+        n_valid += 1
+        if pval < alpha:
+            edges.append((i, j, float(tau), float(pval)))
+    return n_valid, edges
 
 class KendallCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
     """Kendall rank correlation over BOTH one-mode projections of a bipartite
@@ -302,6 +308,8 @@ class KendallCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
                     continue
                 try:
                     w = float(row.iloc[2]) if len(row) > 2 else 1.0
+                    if not np.isfinite(w):
+                        w = 1.0
                 except (ValueError, TypeError):
                     w = 1.0
                 gi = self.gene_dict.setdefault(g, len(self.gene_dict))
@@ -318,9 +326,11 @@ class KendallCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
         self._log(f"Incidence: {self.incidence.shape[0]} type-1 x "
                   f"{self.incidence.shape[1]} type-2 nodes, nnz={self.incidence.nnz}")
 
-    def _project(self, matrix, labels, threshold):
-        """Kendall tau between every pair of ROWS of `matrix`.
-        Returns edges [(labels[i], labels[j], corr), ...] with |corr| >= threshold."""
+    def _project(self, matrix, labels, alpha, correction):
+        """Kendall tau between every pair of ROWS of `matrix`; keep edges that are
+        significant at `alpha` under the chosen multiple-testing `correction`
+        ('none' | 'fdr_bh' | 'bonferroni'). Returns
+        [(labels[i], labels[j], tau, p), ...]."""
         matrix = matrix.tocsr()
         n = matrix.shape[0]
         pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
@@ -336,47 +346,51 @@ class KendallCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
         batches = [pairs[i:i + batch_size] for i in range(0, total, batch_size)]
 
         matrix_data = (matrix.shape, matrix.data, matrix.indices, matrix.indptr)
-        args = [(matrix_data, b, threshold) for b in batches]
+        args = [(matrix_data, b, alpha) for b in batches]
 
-        edges = []
+        m = 0
+        cand = []
         cb = self.progress_callback
         self.progress_callback = None
         try:
             with Pool(cpu_count()) as pool:
-                for batch_result in pool.imap_unordered(_calculate_kendall_static, args):
-                    for i, j, val in batch_result:
-                        edges.append((labels[i], labels[j], val))
+                for n_valid, edges in pool.imap_unordered(_calculate_kendall_static, args):
+                    m += n_valid
+                    cand.extend(edges)
         finally:
             self.progress_callback = cb
-        return edges
+
+        kept = correct(cand, m, alpha, correction)
+        return [(labels[i], labels[j], tau, p) for (i, j, tau, p) in kept]
 
     @staticmethod
     def _write_edges(edges, output_file):
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\n")
-            for a, b, w in edges:
-                f.write(f"{a}\t{b}\t{w:.6f}\n")
+            f.write("source\ttarget\tkendall_tau\tp_value\n")
+            for a, b, tau, p in edges:
+                f.write(f"{a}\t{b}\t{tau:.6f}\t{p:.6g}\n")
 
-    def run(self, type1_output, type2_output=None, threshold=0.0):
-        """Compute BOTH one-mode Kendall projections. type2_output=None → only
-        the type-1 projection is written."""
+    def run(self, type1_output, type2_output=None, alpha=0.05, correction='fdr_bh'):
+        """Compute BOTH one-mode Kendall projections, keeping edges significant at
+        `alpha` under the chosen multiple-testing `correction`. type2_output=None →
+        only the type-1 projection is written."""
         start = time.time()
         self.build_incidence()
 
         gene_labels    = list(self.gene_dict.keys())
         disease_labels = list(self.disease_dict.keys())
 
-        self._log("Type-1 projection (Kendall over type-2 profiles)...")
+        self._log(f"Type-1 projection (Kendall over type-2 profiles, alpha={alpha}, correction={correction})...")
         self._update_progress(40, "Step 2/3: Type-1 projection...")
-        type1_edges = self._project(self.incidence, gene_labels, threshold)
+        type1_edges = self._project(self.incidence, gene_labels, alpha, correction)
         self._write_edges(type1_edges, type1_output)
         self._log(f"Type-1: {len(gene_labels)} nodes, {len(type1_edges)} edges")
 
         type2_edges = []
         if type2_output:
-            self._log("Type-2 projection (Kendall over type-1 profiles)...")
+            self._log(f"Type-2 projection (Kendall over type-1 profiles, alpha={alpha}, correction={correction})...")
             self._update_progress(70, "Step 3/3: Type-2 projection...")
-            type2_edges = self._project(self.incidence.T.tocsr(), disease_labels, threshold)
+            type2_edges = self._project(self.incidence.T.tocsr(), disease_labels, alpha, correction)
             self._write_edges(type2_edges, type2_output)
             self._log(f"Type-2: {len(disease_labels)} nodes, {len(type2_edges)} edges")
 
@@ -387,17 +401,21 @@ class KendallCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
             'nodes_type2': len(disease_labels),
             'edges_type1': len(type1_edges),
             'edges_type2': len(type2_edges),
-            'threshold': threshold,
+            'alpha': alpha,
+            'correction': correction,
             'method': 'kendall',
+            'columns': ['source', 'target', 'kendall_tau', 'p_value'],
             'dual_output': type2_output is not None,
             'execution_time': round(time.time() - start, 2),
         }
 
-def run_kendall_analysis(input_file, output_dir, threshold=0.0, chunksize=10000,
-                         logger=None, progress_callback=None):
+def run_kendall_analysis(input_file, output_dir, alpha=0.05, correction='fdr_bh',
+                         chunksize=10000, logger=None, progress_callback=None):
     """
     Run Kendall correlation analysis, entry point for Flask.
-    Produces BOTH one-mode projections of the bipartite input.
+    Produces BOTH one-mode projections of the bipartite input, keeping edges
+    significant at `alpha` under the chosen `correction`
+    ('none' | 'fdr_bh' | 'bonferroni').
 
     Returns:
         tuple: (stats_dict, type1_output, type2_output)
@@ -411,7 +429,7 @@ def run_kendall_analysis(input_file, output_dir, threshold=0.0, chunksize=10000,
         analyzer.set_progress_callback(progress_callback)
 
     try:
-        stats = analyzer.run(type1_output, type2_output, threshold=threshold)
+        stats = analyzer.run(type1_output, type2_output, alpha=alpha, correction=correction)
         return stats, type1_output, type2_output
     except Exception as e:
         if logger:

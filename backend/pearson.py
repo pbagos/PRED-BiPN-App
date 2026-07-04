@@ -11,6 +11,7 @@ from scipy.stats import pearsonr
 from scipy.sparse import lil_matrix, csr_matrix
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+from pvalue_correction import correct
 import warnings
 import time
 import uuid
@@ -509,19 +510,23 @@ def _build_incidence_matrix(input_file, logger=None):
         col1_labels[idx] = k
     return col0_labels, col1_labels, B
 
-def _write_pearson_projection(M, labels, output_file, p_threshold=0.05, logger=None):
-    """Compute Pearson r and p-value for all row pairs of M, write significant
-    pairs to `output_file` as TSV: source target weight pvalue.
+def _write_pearson_projection(M, labels, output_file, alpha=0.05,
+                              correction='fdr_bh', logger=None):
+    """Compute Pearson r and p-value for all row pairs of M and write the pairs
+    that are significant at `alpha` under the chosen multiple-testing `correction`
+    ('none' | 'fdr_bh' | 'bonferroni') to `output_file` as TSV:
+    source target pearson_r p_value.
 
     Uses numpy.corrcoef vectorized; p-values computed in bulk via the
     t-distribution survival function.
     """
+    header = "source\ttarget\tpearson_r\tp_value\n"
     n_rows, n_cols = M.shape
     if n_rows < 2 or n_cols < 3:
         if logger:
             logger.warning(f"Not enough rows ({n_rows}) or columns ({n_cols}) for Pearson")
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\tpvalue\n")
+            f.write(header)
         return 0
 
     if logger:
@@ -532,9 +537,10 @@ def _write_pearson_projection(M, labels, output_file, p_threshold=0.05, logger=N
     r_vec = R[iu_i, iu_j]
 
     valid = np.isfinite(r_vec)
-    if not np.any(valid):
+    m = int(valid.sum())
+    if m == 0:
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\tpvalue\n")
+            f.write(header)
         return 0
 
     df = n_cols - 2
@@ -543,37 +549,35 @@ def _write_pearson_projection(M, labels, output_file, p_threshold=0.05, logger=N
     from scipy.stats import t as _tdist
     p_vec_valid = 2.0 * _tdist.sf(np.abs(t_stat), df)
 
-    sig_mask = p_vec_valid < p_threshold
-    sig_idx_valid = np.where(sig_mask)[0]
+    vi = iu_i[valid]
+    vj = iu_j[valid]
+    rv = r_vec[valid]
 
-    valid_flat = np.where(valid)[0]
-    chosen_flat = valid_flat[sig_idx_valid]
-
-    rows_i = iu_i[chosen_flat]
-    rows_j = iu_j[chosen_flat]
-    r_out  = r_vec[chosen_flat]
-    p_out  = p_vec_valid[sig_idx_valid]
+    below = np.where(p_vec_valid < alpha)[0]
+    cand = [(int(vi[k]), int(vj[k]), float(rv[k]), float(p_vec_valid[k])) for k in below]
+    kept = correct(cand, m, alpha, correction)
 
     os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
     with open(output_file, 'w', encoding='utf-8') as f:
-        f.write("source\ttarget\tweight\tpvalue\n")
-        for a, b, r_, p_ in zip(rows_i, rows_j, r_out, p_out):
-            f.write(f"{labels[int(a)]}\t{labels[int(b)]}\t{float(r_):.6f}\t{float(p_):.6e}\n")
+        f.write(header)
+        for a, b, r_, p_ in kept:
+            f.write(f"{labels[a]}\t{labels[b]}\t{r_:.6f}\t{p_:.6e}\n")
 
     if logger:
-        logger.info(f"Wrote {len(rows_i)} significant pairs (p<{p_threshold}) to {output_file}")
-    return int(len(rows_i))
+        logger.info(f"Wrote {len(kept)} significant pairs (alpha={alpha}, correction={correction}) to {output_file}")
+    return len(kept)
 
 def run_bipartite_pearson_dual(input_file, node1_output, node2_output,
-                               p_threshold=0.05, logger=None, progress_callback=None):
+                               alpha=0.05, correction='fdr_bh',
+                               logger=None, progress_callback=None):
     """Run dual bipartite Pearson projection in one pass.
 
     For input with iloc[0]=col0_entity, iloc[1]=col1_entity:
       - node1_output: pairs of col-0 entities (e.g. gene-gene if col0=gene)
       - node2_output: pairs of col-1 entities (e.g. disease-disease if col1=disease)
 
-    Output schema for both files: source\\ttarget\\tweight\\tpvalue
-    (weight = Pearson r; only pairs with p < p_threshold are kept.)
+    Output schema for both files: source\\ttarget\\tpearson_r\\tp_value
+    (only pairs significant at `alpha` under `correction` are kept.)
     """
     start = time.time()
     try:
@@ -581,10 +585,10 @@ def run_bipartite_pearson_dual(input_file, node1_output, node2_output,
         col0_labels, col1_labels, B = _build_incidence_matrix(input_file, logger=logger)
         if progress_callback: progress_callback(30)
 
-        n1 = _write_pearson_projection(B, col0_labels, node1_output, p_threshold, logger)
+        n1 = _write_pearson_projection(B, col0_labels, node1_output, alpha, correction, logger)
         if progress_callback: progress_callback(65)
 
-        n2 = _write_pearson_projection(B.T, col1_labels, node2_output, p_threshold, logger)
+        n2 = _write_pearson_projection(B.T, col1_labels, node2_output, alpha, correction, logger)
         if progress_callback: progress_callback(100)
 
         return {
@@ -593,7 +597,8 @@ def run_bipartite_pearson_dual(input_file, node1_output, node2_output,
             'col1_entities':      len(col1_labels),
             'node1_pairs':        n1,
             'node2_pairs':        n2,
-            'p_threshold':        p_threshold,
+            'alpha':              alpha,
+            'correction':         correction,
             'execution_time':     round(time.time() - start, 2),
             'method':             'pearson_bipartite_dual',
         }

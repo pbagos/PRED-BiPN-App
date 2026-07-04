@@ -62,22 +62,21 @@ class FastLinkSalience:
 
     def compute_for_node(self, network, node):
         """
-        Calculates how many times each edge belongs to shortest paths starting from a node.
+        Returns the edges of the shortest-path tree rooted at `node`, each counted
+        ONCE (binary membership). Salience is the fraction of trees an edge belongs
+        to, so an edge must contribute at most 1 per root -- counting it once per
+        downstream target would let salience exceed 1.
         """
         pred = self.dijkstra(network, node)
-        edge_counts = Counter()
+        tree_edges = set()
 
-        for target in pred:
-            if target == node:
+        for target, plist in pred.items():
+            if target == node or not plist:
                 continue
-            current = target
-            while current in pred and pred[current]:
-                predecessor = pred[current][0]
-                edge = tuple(sorted((predecessor, current)))
-                edge_counts[edge] += 1
-                current = predecessor
+            edge = tuple(sorted((plist[0], target)))
+            tree_edges.add(edge)
 
-        return edge_counts
+        return Counter(tree_edges)
 
     def compute_salience(self, edges, processes=None):
         """

@@ -41,7 +41,7 @@ from polya import PolyaFilter, create_polya_filter
 from cosine import GeneSimilarityCosine, run_gene_similarity_cosine
 from adamic_adar import run_adamic_adar_similarity
 from resource_allocation import run_resource_allocation_similarity
-from jaccard import run_jaccard_analysis, JaccardSimilarityAnalyzer
+from jaccard import run_jaccard_analysis, run_jaccard_dual_analysis, JaccardSimilarityAnalyzer
 from kendall import run_kendall_analysis
 from spearman import run_spearman_analysis
 from pearson import run_pearson_analysis, run_bipartite_pearson_dual
@@ -275,10 +275,11 @@ def _execute_processing(data, task_id):
                 result_files = {'result_file': os.path.basename(output_path)}
 
             elif method.lower() == "odds ratio weighted projection":
-                p_threshold  = float(data.get('p_threshold', 0.05))
+                alpha        = float(data.get('alpha', 0.05))
                 or_threshold = float(data.get('or_threshold', 1.0))
+                correction   = data.get('correction', 'fdr_bh')
                 app.logger.info(
-                    f"Starting bipartite odds ratio analysis (p<{p_threshold}, OR>{or_threshold})"
+                    f"Starting bipartite odds ratio analysis (alpha={alpha}, correction={correction}, OR>{or_threshold})"
                 )
                 output_node1 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node1.tsv")
                 output_node2 = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}_node2.tsv")
@@ -288,7 +289,7 @@ def _execute_processing(data, task_id):
                     col0_pairs_output=output_node1,
                     col1_pairs_output=output_node2,
                     sep=None,
-                    p_threshold=p_threshold, or_threshold=or_threshold,
+                    alpha=alpha, or_threshold=or_threshold, correction=correction,
                     progress_callback=None
                 )
                 if not results['success']:
@@ -395,41 +396,32 @@ def _execute_processing(data, task_id):
                 threshold = float(data.get('threshold', 0.0))
                 chunksize = int(data.get('chunksize', 10000))
                 app.logger.info(f"Starting Jaccard Similarity analysis")
-                stats_gene, output_gene = run_jaccard_analysis(
+                stats, output_gene, output_disease = run_jaccard_dual_analysis(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    mode='gene', threshold=threshold, chunksize=chunksize,
+                    threshold=threshold, chunksize=chunksize,
                     logger=app.logger, progress_callback=None
                 )
-                if not stats_gene['success']:
-                    raise RuntimeError(stats_gene.get('error', 'Jaccard gene projection failed'))
+                if not stats['success']:
+                    raise RuntimeError(stats.get('error', 'Jaccard projection failed'))
+                result_files = {}
                 if output_gene and os.path.exists(output_gene):
                     new_gene = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_gene.tsv')
                     os.rename(output_gene, new_gene)
-                    output_gene = new_gene
-                stats_disease, output_disease = run_jaccard_analysis(
-                    input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    mode='disease', threshold=threshold, chunksize=chunksize,
-                    logger=app.logger, progress_callback=None
-                )
-                if not stats_disease['success']:
-                    raise RuntimeError(stats_disease.get('error', 'Jaccard disease projection failed'))
+                    result_files['gene_file'] = os.path.basename(new_gene)
                 if output_disease and os.path.exists(output_disease):
                     new_disease = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_disease.tsv')
                     os.rename(output_disease, new_disease)
-                    output_disease = new_disease
-                result_files = {
-                    'gene_file': os.path.basename(output_gene),
-                    'disease_file': os.path.basename(output_disease)
-                }
-                response_data = {'success': True, 'task_id': task_id, 'files': result_files,
-                                 'stats': {**stats_gene, **stats_disease}}
+                    result_files['disease_file'] = os.path.basename(new_disease)
+                response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "kendall correlation weighted projection":
-                threshold = float(data.get('threshold', 0.0))
+                alpha = float(data.get('alpha', 0.05))
+                correction = data.get('correction', 'fdr_bh')
                 chunksize = int(data.get('chunksize', 10000))
                 stats, type1_out, type2_out = run_kendall_analysis(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, chunksize=chunksize, logger=app.logger, progress_callback=None
+                    alpha=alpha, correction=correction, chunksize=chunksize,
+                    logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Kendall failed'))
@@ -445,11 +437,13 @@ def _execute_processing(data, task_id):
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "spearman correlation weighted projection":
-                threshold = float(data.get('threshold', 0.0))
+                alpha = float(data.get('alpha', 0.05))
+                correction = data.get('correction', 'fdr_bh')
                 chunksize = int(data.get('chunksize', 10000))
                 stats, type1_out, type2_out = run_spearman_analysis(
                     input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    threshold=threshold, chunksize=chunksize, logger=app.logger, progress_callback=None
+                    alpha=alpha, correction=correction, chunksize=chunksize,
+                    logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
                     raise RuntimeError(stats.get('error', 'Spearman failed'))
@@ -465,15 +459,16 @@ def _execute_processing(data, task_id):
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "pearson correlation weighted projection":
-                p_threshold = float(data.get('threshold', 0.05))
-                app.logger.info(f"Starting bipartite Pearson dual projection (p<{p_threshold})")
+                alpha = float(data.get('alpha', 0.05))
+                correction = data.get('correction', 'fdr_bh')
+                app.logger.info(f"Starting bipartite Pearson dual projection (alpha={alpha}, correction={correction})")
                 node1_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node1.tsv')
                 node2_output = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}_node2.tsv')
                 stats = run_bipartite_pearson_dual(
                     input_file=input_path,
                     node1_output=node1_output,
                     node2_output=node2_output,
-                    p_threshold=p_threshold,
+                    alpha=alpha, correction=correction,
                     logger=app.logger, progress_callback=None
                 )
                 if not stats['success']:
@@ -730,15 +725,27 @@ def compare_networks():
             tgt = str(row.iloc[1])
             G_after.add_edge(src, tgt)
 
+        # Vivid, high-contrast colormap with dark node outlines keeps low-degree
+        # nodes visible instead of washing out to white like the old 'Blues' map.
+        # Each image is scaled to its OWN degree range so both use the full colour
+        # gradient; a colorbar legend maps colour -> node degree per image.
+        CMAP = 'turbo'
+
         fig_before, ax_before = plt.subplots(1, 1, figsize=(8, 6))
         if G_before.number_of_nodes() > 0:
             pos_before = nx.spring_layout(G_before, k=1, iterations=30)
             degrees_before = dict(G_before.degree())
             node_colors_before = list(degrees_before.values())
+            vmin_b, vmax_b = min(node_colors_before), max(node_colors_before)
+            if vmin_b == vmax_b:
+                vmax_b = vmin_b + 1
 
-            nx.draw_networkx_nodes(G_before, pos_before, node_color=node_colors_before,
-                                  node_size=50, alpha=0.8, cmap='Blues', ax=ax_before)
-            nx.draw_networkx_edges(G_before, pos_before, alpha=0.4, edge_color='#7f8c8d', width=1, ax=ax_before)
+            nx.draw_networkx_edges(G_before, pos_before, alpha=0.35, edge_color='#4a4a4a', width=0.8, ax=ax_before)
+            nodes_b = nx.draw_networkx_nodes(G_before, pos_before, node_color=node_colors_before,
+                                  node_size=70, cmap=CMAP, vmin=vmin_b, vmax=vmax_b,
+                                  edgecolors='#1a1a1a', linewidths=0.4, ax=ax_before)
+            cbar_b = fig_before.colorbar(nodes_b, ax=ax_before, fraction=0.046, pad=0.04)
+            cbar_b.set_label('Node degree')
             ax_before.set_title(f'Original Network\nNodes: {G_before.number_of_nodes()}, Edges: {G_before.number_of_edges()}')
         else:
             ax_before.text(0.5, 0.5, 'No data to display', ha='center', va='center')
@@ -755,10 +762,16 @@ def compare_networks():
             pos_after = nx.spring_layout(G_after, k=1, iterations=30)
             degrees_after = dict(G_after.degree())
             node_colors_after = list(degrees_after.values())
+            vmin_a, vmax_a = min(node_colors_after), max(node_colors_after)
+            if vmin_a == vmax_a:
+                vmax_a = vmin_a + 1
 
-            nx.draw_networkx_nodes(G_after, pos_after, node_color=node_colors_after,
-                                  node_size=50, alpha=0.8, cmap='Blues', ax=ax_after)
-            nx.draw_networkx_edges(G_after, pos_after, alpha=0.4, edge_color='#7f8c8d', width=1, ax=ax_after)
+            nx.draw_networkx_edges(G_after, pos_after, alpha=0.35, edge_color='#4a4a4a', width=0.8, ax=ax_after)
+            nodes_a = nx.draw_networkx_nodes(G_after, pos_after, node_color=node_colors_after,
+                                  node_size=70, cmap=CMAP, vmin=vmin_a, vmax=vmax_a,
+                                  edgecolors='#1a1a1a', linewidths=0.4, ax=ax_after)
+            cbar_a = fig_after.colorbar(nodes_a, ax=ax_after, fraction=0.046, pad=0.04)
+            cbar_a.set_label('Node degree')
             ax_after.set_title(f'Filtered Network\nNodes: {G_after.number_of_nodes()}, Edges: {G_after.number_of_edges()}')
         else:
             ax_after.text(0.5, 0.5, 'No data to display', ha='center', va='center')

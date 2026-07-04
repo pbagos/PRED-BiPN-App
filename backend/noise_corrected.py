@@ -302,11 +302,6 @@ class NoiseCorrectedBackbone:
             })
 
             cols = ['source', 'target', 'weight']
-            for c in ['N_i', 'N_j', 'E_ij', 'L_ij', 'L_tilde',
-                    'P_ij', 'V_Nij', 'V_L_tilde', 'z_score', 'significant']:
-                if c in out.columns:
-                    cols.append(c)
-
             out[cols].to_csv(self.output_file, index=False, float_format='%.6f', sep='\t')
             print(f"\nSaved {len(backbone)} edges to: {self.output_file}")
 

@@ -324,10 +324,11 @@ class LANS:
 
             for r, c, w in zip(row_indices, col_indices, valid_weight):
                 if r >= 0 and c >= 0 and r != c:
-                    if r < c:
-                        matrix[r, c] += w
-                    else:
-                        matrix[c, r] += w
+                    # Symmetric storage: row i must hold ALL of node i's incident
+                    # edges so row.sum() == strength s_i and p_ij = w_ij / s_i is
+                    # correct, and both endpoints can be tested (either-endpoint LANS).
+                    matrix[r, c] += w
+                    matrix[c, r] += w
 
             rows_processed += len(chunk)
             self._check_memory()
@@ -390,11 +391,17 @@ class LANS:
                 n_neighbors = len(weights)
 
                 for j, p_ij in zip(row.indices, row.data):
-                    if i < j:
-                        ecdf = sum(1 for w in weights if w <= p_ij) / n_neighbors
-                        if (1 - ecdf) < alpha:
-                            assert self.matrix is not None
-                            edges.append((i, j, self.matrix[i, j]))
+                    if i == j:
+                        continue
+                    # LANS keeps edge (i,j) if it is significant from EITHER
+                    # endpoint's local weight distribution. Here we test node i's
+                    # perspective (p_ij = w_ij / s_i); node j's chunk tests its own,
+                    # and extract_backbone unions the two by deduping the pair.
+                    ecdf = sum(1 for w in weights if w <= p_ij) / n_neighbors
+                    if (1 - ecdf) < alpha:
+                        assert self.matrix is not None
+                        a, b = (i, j) if i < j else (j, i)
+                        edges.append((a, b, self.matrix[i, j]))
 
             return edges
 
@@ -409,15 +416,20 @@ class LANS:
         chunks = [(list(range(i, min(i + step, n_nodes))), self.alpha)
                   for i in range(0, n_nodes, step)]
 
+        # Dedup the union of both endpoints: an edge may be emitted by node i and
+        # again by node j; keep it once (its weight is symmetric).
+        edge_map = {}
         with mp.Pool(processes=self.n_cores) as pool:
             for result in tqdm(
                 pool.imap_unordered(self._extract_backbone_chunk, chunks),
                 total=len(chunks),
                 desc="Processing nodes"
             ):
-                edges.extend(result)
+                for a, b, w in result:
+                    edge_map[(a, b)] = w
                 self._check_memory()
 
+        edges = [(a, b, w) for (a, b), w in edge_map.items()]
         return edges
 
     def save_results(self, edges, output_file="backbone_results.tsv", gephi_file="backbone_gephi.tsv"):

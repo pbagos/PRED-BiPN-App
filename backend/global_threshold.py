@@ -41,6 +41,21 @@ def _peek(filepath: str, sep: str, n: int = 5) -> pd.DataFrame:
         engine='python', skipinitialspace=True
     )
 
+def _output_col_names(n: int, col_index: int) -> list:
+    """Positional output header: col 0 -> source, col 1 -> target, the filtered
+    numeric column (col_index) -> weight, any remaining columns -> col_i."""
+    names = []
+    for i in range(n):
+        if i == 0:
+            names.append('source')
+        elif i == 1:
+            names.append('target')
+        elif i == col_index:
+            names.append('weight')
+        else:
+            names.append(f'col_{i}')
+    return names
+
 def _ask_user(sample: pd.DataFrame):
     n_cols = sample.shape[1]
     print("\n=== File preview (first rows) ===")
@@ -133,8 +148,9 @@ class GlobalThresholdFilter:
         Reads input_file in chunks, applies threshold filter,
         writes result to output_file as CSV.
 
-        Output header: source, target, col_2, col_3, ... (positional names)
-        First two columns always renamed to source / target.
+        Output header: source, target, weight, col_3, ... (positional names).
+        Columns 0/1 are renamed source/target and the filtered numeric column
+        is renamed weight; any further columns keep positional col_i names.
 
         Returns:
             dict with success, rows_in, rows_out, execution_time
@@ -188,8 +204,7 @@ class GlobalThresholdFilter:
                     continue
 
                 n = filtered.shape[1]
-                col_names    = ['source', 'target'] + [f'col_{i}' for i in range(2, n)]
-                filtered.columns = col_names
+                filtered.columns = _output_col_names(n, self.col_index)
 
                 if first_write:
                     filtered.to_csv(output_file, index=False, mode='w', sep='\t')
@@ -201,7 +216,7 @@ class GlobalThresholdFilter:
 
             if first_write:
                 n         = _peek(input_file, sep, 1).shape[1]
-                col_names = ['source', 'target'] + [f'col_{i}' for i in range(2, n)]
+                col_names = _output_col_names(n, self.col_index)
                 pd.DataFrame(columns=col_names).to_csv(output_file, index=False, sep='\t')
 
             self._update_progress(100)

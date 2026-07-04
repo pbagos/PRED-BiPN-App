@@ -38,10 +38,13 @@
     }
 
     .error-message {
+        display: block;
+        width: 100%;
+        flex-basis: 100%;
         color: #b91c1c;
         font-size: 12px;
-        margin-top: -8px;
-        margin-bottom: 10px;
+        line-height: 1.4;
+        margin: 6px 0 2px;
         text-align: left;
         font-family: 'Arial', sans-serif;
     }
@@ -460,6 +463,11 @@
         font-family: 'Arial', sans-serif;
         font-size: 13px;
         display: inline-block;
+    }
+
+    select.param-input {
+        width: auto;
+        min-width: 220px;
     }
 
     .param-input:focus {
@@ -1699,10 +1707,16 @@
         color: #3a6e9f;
     }
 
+    .metric-label {
+        font-size: 0.7rem;
+        color: #5e7a9a;
+    }
+
     .metric-value {
         font-family: monospace;
         font-size: 0.7rem;
         color: #2c4c6e;
+        font-weight: 600;
     }
 
     .vs-divider {

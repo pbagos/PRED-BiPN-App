@@ -11,6 +11,7 @@ from scipy.stats import spearmanr
 from scipy.sparse import csr_matrix
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+from pvalue_correction import correct
 import warnings
 import time
 import uuid
@@ -91,9 +92,12 @@ class BaseGeneCorrelationAnalyzer:
         return False
 
     def _clean_data(self, chunk):
-        """Vectorized clean, no iterrows."""
-        chunk = chunk.dropna()
+        """Vectorized clean, no iterrows. Only inspects the first two columns so
+        a trailing separator / all-NaN extra column doesn't drop every row."""
+        if chunk.shape[1] < 2:
+            return chunk.iloc[0:0]
         mask = (
+            chunk.iloc[:, 0].notna() & chunk.iloc[:, 1].notna() &
             ~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', '']) &
             ~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])
         )
@@ -271,6 +275,8 @@ class SpearmanCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
                     continue
                 try:
                     w = float(row.iloc[2]) if len(row) > 2 else 1.0
+                    if not np.isfinite(w):
+                        w = 1.0
                 except (ValueError, TypeError):
                     w = 1.0
                 gi = self.gene_dict.setdefault(g, len(self.gene_dict))
@@ -287,54 +293,69 @@ class SpearmanCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
         self._log(f"Incidence: {self.incidence.shape[0]} type-1 x "
                   f"{self.incidence.shape[1]} type-2 nodes, nnz={self.incidence.nnz}")
 
-    def _project(self, matrix, labels, threshold):
-        """Spearman rank correlation between every pair of ROWS of `matrix`.
-        Returns edges [(labels[i], labels[j], corr), ...] with |corr| >= threshold."""
+    def _project(self, matrix, labels, alpha, correction):
+        """Spearman rank correlation between every pair of ROWS of `matrix`; keep
+        edges significant at `alpha` under the chosen multiple-testing `correction`
+        ('none' | 'fdr_bh' | 'bonferroni'). Returns
+        [(labels[i], labels[j], rho, p), ...]."""
         from scipy.stats import spearmanr
         dense = matrix.toarray()
         n = dense.shape[0]
         if n < 2 or dense.shape[1] < 2:
             return []
-        rho, _ = spearmanr(dense, axis=1)
-        rho = np.asarray(rho, dtype=float)
+        rho, pval = spearmanr(dense, axis=1)
+        rho  = np.asarray(rho, dtype=float)
+        pval = np.asarray(pval, dtype=float)
+
+        m = 0
+        cand = []
         if rho.ndim == 0:
-            v = float(rho)
-            return [(labels[0], labels[1], v)] if (not np.isnan(v) and abs(v) >= threshold) else []
-        edges = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                v = rho[i, j]
-                if not np.isnan(v) and abs(v) >= threshold:
-                    edges.append((labels[i], labels[j], float(v)))
-        return edges
+            v, p = float(rho), float(pval)
+            if not (np.isnan(v) or np.isnan(p)):
+                m = 1
+                if p < alpha:
+                    cand.append((0, 1, v, p))
+        else:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    v, p = rho[i, j], pval[i, j]
+                    if np.isnan(v) or np.isnan(p):
+                        continue
+                    m += 1
+                    if p < alpha:
+                        cand.append((i, j, float(v), float(p)))
+
+        kept = correct(cand, m, alpha, correction)
+        return [(labels[i], labels[j], v, p) for (i, j, v, p) in kept]
 
     @staticmethod
     def _write_edges(edges, output_file):
         with open(output_file, 'w', encoding='utf-8') as f:
-            f.write("source\ttarget\tweight\n")
-            for a, b, w in edges:
-                f.write(f"{a}\t{b}\t{w:.6f}\n")
+            f.write("source\ttarget\tspearman_rho\tp_value\n")
+            for a, b, v, p in edges:
+                f.write(f"{a}\t{b}\t{v:.6f}\t{p:.6g}\n")
 
-    def run(self, type1_output, type2_output=None, threshold=0.0):
-        """Compute BOTH one-mode Spearman projections. type2_output=None → only
-        the type-1 projection is written."""
+    def run(self, type1_output, type2_output=None, alpha=0.05, correction='fdr_bh'):
+        """Compute BOTH one-mode Spearman projections, keeping edges significant at
+        `alpha` under the chosen multiple-testing `correction`. type2_output=None →
+        only the type-1 projection is written."""
         start = time.time()
         self.build_incidence()
 
         gene_labels    = list(self.gene_dict.keys())
         disease_labels = list(self.disease_dict.keys())
 
-        self._log("Type-1 projection (Spearman over type-2 profiles)...")
+        self._log(f"Type-1 projection (Spearman over type-2 profiles, alpha={alpha}, correction={correction})...")
         self._update_progress(40, "Step 2/3: Type-1 projection...")
-        type1_edges = self._project(self.incidence, gene_labels, threshold)
+        type1_edges = self._project(self.incidence, gene_labels, alpha, correction)
         self._write_edges(type1_edges, type1_output)
         self._log(f"Type-1: {len(gene_labels)} nodes, {len(type1_edges)} edges")
 
         type2_edges = []
         if type2_output:
-            self._log("Type-2 projection (Spearman over type-1 profiles)...")
+            self._log(f"Type-2 projection (Spearman over type-1 profiles, alpha={alpha}, correction={correction})...")
             self._update_progress(70, "Step 3/3: Type-2 projection...")
-            type2_edges = self._project(self.incidence.T.tocsr(), disease_labels, threshold)
+            type2_edges = self._project(self.incidence.T.tocsr(), disease_labels, alpha, correction)
             self._write_edges(type2_edges, type2_output)
             self._log(f"Type-2: {len(disease_labels)} nodes, {len(type2_edges)} edges")
 
@@ -345,15 +366,19 @@ class SpearmanCorrelationAnalyzer(BaseGeneCorrelationAnalyzer):
             'nodes_type2': len(disease_labels),
             'edges_type1': len(type1_edges),
             'edges_type2': len(type2_edges),
-            'threshold': threshold,
+            'alpha': alpha,
+            'correction': correction,
             'method': 'spearman',
+            'columns': ['source', 'target', 'spearman_rho', 'p_value'],
             'dual_output': type2_output is not None,
             'execution_time': round(time.time() - start, 2),
         }
 
-def run_spearman_analysis(input_file, output_dir, threshold=0.0, chunksize=10000,
-                          logger=None, progress_callback=None):
-    """Run Spearman analysis, produces BOTH one-mode projections.
+def run_spearman_analysis(input_file, output_dir, alpha=0.05, correction='fdr_bh',
+                          chunksize=10000, logger=None, progress_callback=None):
+    """Run Spearman analysis, produces BOTH one-mode projections, keeping edges
+    significant at `alpha` under the chosen `correction`
+    ('none' | 'fdr_bh' | 'bonferroni').
     Returns (stats_dict, type1_output, type2_output)."""
     task_id      = str(uuid.uuid4())[:8]
     type1_output = os.path.join(output_dir, f"spearman_{task_id}_type1.tsv")
@@ -364,7 +389,7 @@ def run_spearman_analysis(input_file, output_dir, threshold=0.0, chunksize=10000
         analyzer.set_progress_callback(progress_callback)
 
     try:
-        stats = analyzer.run(type1_output, type2_output, threshold=threshold)
+        stats = analyzer.run(type1_output, type2_output, alpha=alpha, correction=correction)
         return stats, type1_output, type2_output
     except Exception as e:
         if logger:
