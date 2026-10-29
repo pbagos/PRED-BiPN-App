@@ -37,15 +37,15 @@ def _polya_pvalue_mp(w: float, k: int, s: float, a: float, apr_lvl: float = 10) 
     s_int = int(round(s))
     if a == 0:
         return float(scipy.stats.binom.sf(w_int - 1, s_int, 1.0 / k))
-    if w_int <= 0:
-        return 1.0
-    if w_int > s_int:
-        return 0.0
     if apr_lvl < 0:
         if s > 0:
             p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
             return float(min(max(p, 0.0), 1.0))
         return 1.0
+    if w_int <= 0:
+        return 1.0
+    if w_int > s_int:
+        return 0.0
     L = apr_lvl
     idx1 = (s - w) >= L * ((k - 1) / a + 1)
     idx2 = w >= L * max(1 / a, 1)
@@ -262,16 +262,16 @@ class PolyaFilter:
         if a == 0:
             return float(scipy.stats.binom.sf(w_int - 1, s_int, 1.0 / k))
 
-        if w_int <= 0:
-            return 1.0
-        if w_int > s_int:
-            return 0.0
-
         if apr_lvl < 0:
             if s > 0:
                 p = 1.0 - sp.betainc(1.0 / a, (k - 1.0) / a, w / s)
                 return float(min(max(p, 0.0), 1.0))
             return 1.0
+
+        if w_int <= 0:
+            return 1.0
+        if w_int > s_int:
+            return 0.0
 
         L = apr_lvl
         idx1 = (s - w) >= L * ((k - 1) / a + 1)
@@ -386,6 +386,11 @@ class PolyaFilter:
 
         self.node_props = {node: (int(props[0]), float(props[1]))
                           for node, props in node_properties.items() if props[0] > 0}
+
+        non_integer = sum(1 for _, _, w in edge_list if w != int(w))
+        if non_integer:
+            self._log_message(f"  WARNING: {non_integer:,} edge weights are not integers. The Polya filter "
+                              f"models counts, so weights are rounded to the nearest integer.", 'warning')
 
         self._log_message(f"\n  Found {len(self.node_props):,} unique nodes")
 

@@ -13,6 +13,7 @@ Output CSV:  source, target, weight
 """
 
 import pandas as pd
+from input_format import has_header_row
 import numpy as np
 from scipy.sparse import lil_matrix, csr_matrix, save_npz
 from tqdm import tqdm
@@ -80,7 +81,7 @@ class JaccardSimilarityAnalyzer:
         sep    = self._detect_separator()
         assert self.filepath is not None
         sample = pd.read_csv(
-            self.filepath, sep=sep, header=None,
+            self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
             nrows=200, dtype=str,
             engine='python', skipinitialspace=True,
             usecols=[0, 1]
@@ -95,10 +96,8 @@ class JaccardSimilarityAnalyzer:
 
     def _clean_data(self, chunk):
         chunk = chunk.dropna()
-        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.contains(
-            'nan|None', case=False, na=False)]
-        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.contains(
-            'nan|None', case=False, na=False)]
+        chunk = chunk[~chunk.iloc[:, 0].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
+        chunk = chunk[~chunk.iloc[:, 1].astype(str).str.strip().str.lower().isin(['nan', 'none', ''])]
         return chunk
 
     def build_mappings_bipartite(self):
@@ -110,7 +109,7 @@ class JaccardSimilarityAnalyzer:
         gene_counter = disease_counter = chunk_count = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,
+            pd.read_csv(self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -145,7 +144,7 @@ class JaccardSimilarityAnalyzer:
         chunk_count  = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,
+            pd.read_csv(self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -184,7 +183,7 @@ class JaccardSimilarityAnalyzer:
         gene_counter = chunk_count = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,
+            pd.read_csv(self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True,
                         usecols=[0, 1]),
@@ -217,7 +216,7 @@ class JaccardSimilarityAnalyzer:
         chunk_count  = 0
 
         for chunk in tqdm(
-            pd.read_csv(self.filepath, sep=sep, header=None,
+            pd.read_csv(self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
                         chunksize=self.chunksize, dtype=str,
                         engine='python', skipinitialspace=True),
             total=total_chunks, desc="Building matrix"

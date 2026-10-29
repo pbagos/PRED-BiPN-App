@@ -1,14 +1,14 @@
 import numpy as np
 import pandas as pd
 import networkx as nx
-from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse import coo_matrix, csr_matrix, triu
 from collections import defaultdict
 from tqdm import tqdm
 
 class TrueMultiscaleBackbone:
     def __init__(self, max_iter=200, tol=1e-6, smoothing_power=2,
                  significance_level=0.05, sparsity_adjustment=True,
-                 early_stop_percentile=5, min_edges=None):
+                 early_stop_percentile=5, min_edges=None, directed=False):
         self.max_iter = max_iter
         self.tol = tol
         self.smoothing_power = smoothing_power
@@ -16,6 +16,7 @@ class TrueMultiscaleBackbone:
         self.sparsity_adjustment = sparsity_adjustment
         self.early_stop_percentile = early_stop_percentile
         self.min_edges = min_edges
+        self.directed = directed
 
     def _detect_separator(self, file_path):
         with open(file_path, 'r') as f:
@@ -88,7 +89,7 @@ class TrueMultiscaleBackbone:
         percentile_threshold = np.percentile(weights, self.early_stop_percentile)
         significance_threshold = self.significance_level if self.significance_level else 0
 
-        G = nx.DiGraph()
+        G = nx.DiGraph() if self.directed else nx.Graph()
         G.add_nodes_from(node_names)
         adj_list = defaultdict(list)
         backbone_edges = []
@@ -99,6 +100,8 @@ class TrueMultiscaleBackbone:
 
             G.add_edge(node_names[i], node_names[j], weight=w)
             adj_list[i].append(j)
+            if not self.directed:
+                adj_list[j].append(i)
             backbone_edges.append((i, j, w))
 
             if self.min_edges and len(backbone_edges) < self.min_edges:
@@ -183,8 +186,15 @@ class TrueMultiscaleBackbone:
             print("Warning: The sparse matrix is empty.")
             return nx.DiGraph()
 
+        if not self.directed:
+            # undirected: A-B and B-A are the same edge, so normalise the
+            # symmetric matrix and keep each pair once (upper triangle)
+            sparse_matrix = (sparse_matrix + sparse_matrix.T).tocsr()
+
         print("Normalizing matrix...")
         normalized = self._make_doubly_stochastic(sparse_matrix)
+        if not self.directed:
+            normalized = triu(normalized.maximum(normalized.T), k=1).tocsr()
 
         print("Extracting backbone...")
         backbone = self._build_backbone(normalized, nodes)
@@ -192,7 +202,7 @@ class TrueMultiscaleBackbone:
         print(f"\nResults:")
         print(f"  Nodes: {backbone.number_of_nodes()}")
         print(f"  Edges: {backbone.number_of_edges()}")
-        print(f"  Strongly connected: {nx.is_strongly_connected(backbone)}")
+        print(f"  Connected: {nx.is_strongly_connected(backbone) if self.directed else nx.is_connected(backbone)}")
 
         rows = []
         for u, v, data in backbone.edges(data=True):
@@ -210,5 +220,5 @@ if __name__ == "__main__":
         "weighted_gene_edges_one_mode.tsv",
         "ds_backbone.csv",
         mode='strict',
-        nrows=200000
+        nrows=None
     )

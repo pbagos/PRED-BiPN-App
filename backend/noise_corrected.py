@@ -15,7 +15,7 @@ from tqdm import tqdm
 warnings.filterwarnings('ignore')
 
 class NoiseCorrectedBackbone:
-    def __init__(self, input_file, output_file, delta=1.64, alpha_prior=1.0, one_sided=False, max_workers=None, limit=200000):
+    def __init__(self, input_file, output_file, delta=1.64, alpha_prior=1.0, one_sided=False, max_workers=None, limit=None, directed=False):
         self.input_file = input_file
         self.output_file = output_file
         self.delta = delta
@@ -23,6 +23,7 @@ class NoiseCorrectedBackbone:
         self.one_sided = one_sided
         self.max_workers = max_workers
         self.limit = limit
+        self.directed = directed
         self.df = None
         self.source_col = None
         self.target_col = None
@@ -270,12 +271,20 @@ class NoiseCorrectedBackbone:
         df['_weight'] = df['_weight'].astype('float64')
 
         print("Calculating node strengths...")
-        node_strength_out = df.groupby('_source')['_weight'].sum()
-        node_strength_in = df.groupby('_target')['_weight'].sum()
+        if self.directed:
+            node_strength_out = df.groupby('_source')['_weight'].sum()
+            node_strength_in = df.groupby('_target')['_weight'].sum()
+            N_total = float(df['_weight'].sum())
+        else:
+            # undirected: one strength per node (both columns), and the symmetric
+            # weight matrix counts every edge twice, so N.. = 2 * sum(w)
+            strength = df.groupby('_source')['_weight'].sum().add(
+                df.groupby('_target')['_weight'].sum(), fill_value=0)
+            node_strength_out = node_strength_in = strength
+            N_total = 2.0 * float(df['_weight'].sum())
 
         df['N_i'] = df['_source'].map(node_strength_out).astype('float64')
         df['N_j'] = df['_target'].map(node_strength_in).astype('float64')
-        N_total = float(df['_weight'].sum())
 
         chunk_size = min(50000, max(1000, len(df) // max(1, (cpu_count()))))
         chunks = [df.iloc[i:i + chunk_size].copy() for i in range(0, len(df), chunk_size)]
@@ -355,7 +364,7 @@ def main():
     parser.add_argument('--zthresh', type=float, default=4.0, help='Z-score threshold for strict filtering')
     parser.add_argument('--percentile', type=float, default=95, help='Node degree percentile for strict filtering')
     parser.add_argument('--output', type=str, default='filtered_edges.tsv', help='Output TSV filename')
-    parser.add_argument('--limit', type=int, default=200000, help='Limit number of input rows processed')
+    parser.add_argument('--limit', type=int, default=None, help='Limit number of input rows processed')
     parser.add_argument('--input', type=str, required=True, help='Input file')
     parser.add_argument('--alpha', type=float, default=1.0, help='Alpha prior for Beta')
     parser.add_argument('--one-sided', action='store_true', help='Use one-sided z test (positive L_tilde only)')

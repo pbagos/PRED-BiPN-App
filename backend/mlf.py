@@ -93,8 +93,11 @@ class MLFProcessor:
         total_weight = 0
         edge_count = 0
 
+        non_integer = 0
         for chunk in self._load_chunks(input_file, sep):
-            weight_vals = pd.to_numeric(chunk.iloc[:, 2], errors='coerce').fillna(1).astype(int)
+            raw_weights = pd.to_numeric(chunk.iloc[:, 2], errors='coerce').fillna(1)
+            non_integer += int((raw_weights % 1 != 0).sum())
+            weight_vals = raw_weights.astype(int)
 
             for i, row in chunk.iterrows():
                 u = str(row.iloc[0]).strip()
@@ -124,6 +127,9 @@ class MLFProcessor:
                 break
 
         strength = np.array(strength, dtype=np.float64)
+        if non_integer:
+            self._log(f"WARNING: {non_integer} edge weights are not integers. The Marginal Likelihood Filter "
+                      f"models counts, so weights are truncated to integers.", "warning")
         self._log(f"  Nodes: {len(node_index)}, Edges: {edge_count}, Total weight: {total_weight:.2f}")
 
         self._log("\n[2/2] Filtering edges and computing statistics...")

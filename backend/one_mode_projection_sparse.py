@@ -17,6 +17,7 @@ import numpy as np
 from scipy import sparse
 from tqdm import tqdm
 import pandas as pd
+from input_format import has_header_row
 import gc
 import warnings
 import time
@@ -109,7 +110,7 @@ class OneModeProjection:
         self._log(f"Separator: {repr(sep)} | lines: {total_lines} | chunks: {total_chunks}")
 
         chunk_reader = pd.read_csv(
-            filename, sep=sep, header=None,
+            filename, sep=sep, header=None, skiprows=int(has_header_row(filename, sep)),
             chunksize=self.chunk_size, dtype=str,
             engine='python', skipinitialspace=True,
             usecols=[0, 1]

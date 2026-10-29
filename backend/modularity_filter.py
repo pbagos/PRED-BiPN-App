@@ -1,158 +1,95 @@
 import networkx as nx
 import time
 import pandas as pd
-from typing import Optional, Dict
 from community import community_louvain
-from collections import defaultdict
 import numpy as np
 from scipy import sparse
 from tqdm import tqdm
 
 class SparseModularityBackbone:
-    def __init__(self, G):
-        self.original_G = G.copy()
-        self.G = G.copy()
-        self.nodes = list(self.G.nodes())
+    """Modularity-vitality backbone (Magelinski et al.): repeatedly remove the
+    node whose removal changes the modularity Q of the Louvain partition the
+    least, until `percentage` of the nodes is left.
+
+    Q = sum_c [ in_c / m - (tot_c / 2m)^2 ], m = total edge weight. Removing
+    node i (community c, strength k_i, weight K[i,d] to community d) gives
+        m' = m - k_i,  in_c' = in_c - K[i,c],
+        tot_d' = tot_d - K[i,d]  (d != c),  tot_c' = tot_c - K[i,c] - k_i,
+    so the vitality of every node is one vectorised pass over K per step.
+    """
+
+    def __init__(self, G, seed=42):
+        self.G = G
+        self.seed = seed
+        # sorted so that ties (and the result) do not depend on the file's row order
+        self.nodes = sorted(G.nodes(), key=str)
         self.node_index = {node: i for i, node in enumerate(self.nodes)}
         self.n_nodes = len(self.nodes)
 
         rows, cols, data = [], [], []
-        for u, v, d in self.G.edges(data=True):
-            weight = d.get('weight', 1.0)
-            rows.append(self.node_index[u])
-            cols.append(self.node_index[v])
-            data.append(weight)
-            if u != v:
-                rows.append(self.node_index[v])
-                cols.append(self.node_index[u])
-                data.append(weight)
+        for u, v, d in G.edges(data=True):
+            if u == v:
+                continue
+            i, j, w = self.node_index[u], self.node_index[v], d.get('weight', 1.0)
+            rows += [i, j]; cols += [j, i]; data += [w, w]
+        self.adj = sparse.csr_matrix((data, (rows, cols)), shape=(self.n_nodes, self.n_nodes))
 
-        self.adj_matrix = sparse.csr_matrix((data, (rows, cols)),
-                                            shape=(self.n_nodes, self.n_nodes))
-        self.partition: Optional[Dict] = None
-        self.communities: Optional[Dict] = None
-        self.total_weight: Optional[float] = None
-        self.community_metrics: Optional[Dict] = None
-
-    def compute_initial_partition(self):
-        print("Computing initial partition using Louvain method...")
-        start = time.time()
-        self.partition = community_louvain.best_partition(self.G, weight='weight')
-        self._update_community_structures()
-        self.total_weight = float(self.adj_matrix.sum()) / 2
-        self._precompute_community_metrics()
-        print(f"Initial partition completed in {time.time()-start:.2f} seconds")
-
-    def _update_community_structures(self):
-        self.communities = defaultdict(set)
-        assert self.partition is not None
-        for node, comm in self.partition.items():
-            self.communities[comm].add(node)
-
-    def _precompute_community_metrics(self):
-        self.community_metrics = {}
-        assert self.communities is not None
-        for comm, node_ids in self.communities.items():
-            node_indices = [self.node_index[n] for n in node_ids]
-            submatrix = self.adj_matrix[node_indices, :][:, node_indices]
-            sum_in = submatrix.sum() / 2
-            sum_tot = self.adj_matrix[node_indices, :].sum()
-            self.community_metrics[comm] = {
-                'sum_in': sum_in,
-                'sum_tot': sum_tot,
-                'node_ids': node_ids
-            }
-
-    def compute_modularity(self):
-        if self.total_weight == 0:
-            return 0.0
-        Q = 0.0
-        assert self.community_metrics is not None
-        assert self.total_weight is not None
-        for metrics in self.community_metrics.values():
-            sum_in = metrics['sum_in']
-            sum_tot = metrics['sum_tot']
-            Q += (sum_in / self.total_weight) - (sum_tot / (2 * self.total_weight)) ** 2
-        return Q
-
-    def compute_vitality(self, node_id):
-        assert self.partition is not None
-        assert self.communities is not None
-        assert self.community_metrics is not None
-        if node_id not in self.partition:
-            return 0.0
-        node_idx = self.node_index[node_id]
-        comm = self.partition[node_id]
-        original_modularity = self.compute_modularity()
-
-        node_row = self.adj_matrix[node_idx, :]
-        node_sum_tot = node_row.sum()
-        comm_node_indices = [self.node_index[n] for n in self.communities[comm]]
-        node_sum_in = node_row[:, comm_node_indices].sum()
-
-        temp_metrics = {c: dict(metrics) for c, metrics in self.community_metrics.items()}
-        temp_metrics[comm]['sum_in'] -= node_sum_in
-        temp_metrics[comm]['sum_tot'] -= node_sum_tot
-
-        m = self.total_weight - node_sum_tot
-        if m <= 0:
-            return 0.0
-
-        new_modularity = 0.0
-        for metrics in temp_metrics.values():
-            new_modularity += (metrics['sum_in'] / m) - (metrics['sum_tot'] / (2 * m)) ** 2
-
-        return original_modularity - new_modularity
-
-    def remove_node_and_update(self, node_id):
-        assert self.partition is not None
-        assert self.communities is not None
-        assert self.community_metrics is not None
-        if node_id not in self.partition:
-            return
-        node_idx = self.node_index[node_id]
-        comm = self.partition[node_id]
-
-        node_row = self.adj_matrix[node_idx, :]
-        node_sum_tot = node_row.sum()
-        comm_node_indices = [self.node_index[n] for n in self.communities[comm]]
-        node_sum_in = node_row[:, comm_node_indices].sum()
-
-        self.community_metrics[comm]['sum_in'] -= node_sum_in
-        self.community_metrics[comm]['sum_tot'] -= node_sum_tot
-        self.total_weight -= node_sum_tot
-
-        self.adj_matrix[node_idx, :] = 0
-        self.adj_matrix[:, node_idx] = 0
-
-        self.communities[comm].remove(node_id)
-        del self.partition[node_id]
-
-        if not self.communities[comm]:
-            del self.communities[comm]
-            del self.community_metrics[comm]
+    @staticmethod
+    def vitality(K, k, tot, comm, S_in, m):
+        """Q(G) - Q(G without node i) for every node i."""
+        own = K[np.arange(len(k)), comm]
+        S_sq = (tot ** 2).sum()
+        Q = S_in / m - S_sq / (4 * m * m)
+        m2 = m - k
+        a = tot[comm] - own
+        S_sq2 = S_sq - 2 * (K @ tot) + (K * K).sum(axis=1) - 2 * a * k + k * k
+        with np.errstate(divide='ignore', invalid='ignore'):
+            Q2 = (S_in - own) / m2 - S_sq2 / (4 * m2 * m2)
+        return np.where(m2 > 0, Q - Q2, 0.0)
 
     def extract_backbone(self, percentage=0.3):
-        self.compute_initial_partition()
-        target_size = max(1, int(self.n_nodes * percentage))
+        print("Computing initial partition using Louvain method...")
+        partition = community_louvain.best_partition(self.G, weight='weight', random_state=self.seed)
+        comm_ids = {c: k for k, c in enumerate(sorted(set(partition.values())))}
+        comm = np.array([comm_ids[partition[n]] for n in self.nodes])
+        n, C = self.n_nodes, len(comm_ids)
+
+        # Dense node x community matrix, O(n*C) memory; switch K to
+        # sparse if networks reach ~1e5 nodes with hundreds of communities
+        member = sparse.csr_matrix((np.ones(n), (np.arange(n), comm)), shape=(n, C))
+        K = np.asarray((self.adj @ member).todense())
+        k = K.sum(axis=1)
+        tot = np.bincount(comm, weights=k, minlength=C)
+        own = K[np.arange(n), comm]
+        S_in = own.sum() / 2
+        m = k.sum() / 2
+        alive = np.ones(n, dtype=bool)
+
+        target_size = max(1, int(n * percentage))
         print(f"Extracting backbone with target size {target_size} nodes...")
-        pbar = tqdm(total=self.n_nodes - target_size)
+        pbar = tqdm(total=n - target_size)
+        while alive.sum() > target_size and m > 0:
+            own = K[np.arange(n), comm]
+            vit = self.vitality(K, k, tot, comm, S_in, m)
+            vit[~alive] = np.inf
+            r = int(np.argmin(np.abs(vit)))
 
-        while self.adj_matrix.nnz > 0 and len(self.partition) > target_size:
-            vitals = {n: self.compute_vitality(n) for n in list(self.partition.keys())}
-            if not vitals:
-                break
-            min_node = min(vitals.keys(), key=lambda x: abs(vitals[x]))
-            self.remove_node_and_update(min_node)
+            # remove node r and its edges
+            c = comm[r]
+            tot -= K[r]
+            tot[c] -= k[r]
+            S_in -= own[r]
+            m -= k[r]
+            row = self.adj.getrow(r)
+            K[row.indices, c] -= row.data
+            k[row.indices] -= row.data
+            K[r] = 0
+            k[r] = 0
+            alive[r] = False
             pbar.update(1)
-
         pbar.close()
-        remaining_nodes = list(self.partition.keys())
-        backbone = self.G.subgraph(remaining_nodes).copy()
 
-        remaining_nodes = list(self.partition.keys())
-        backbone = self.G.subgraph(remaining_nodes).copy()
-        return backbone
+        return self.G.subgraph([self.nodes[i] for i in np.flatnonzero(alive)]).copy()
 
 def load_graph_sparse(file_path, max_lines=None):
     """
@@ -202,7 +139,8 @@ def save_backbone_sparse(backbone, output_file):
 class ModularityFilter:
     """Wrapper class for Flask server."""
 
-    def __init__(self, percentage=0.3, test_mode=False, max_lines=None):
+    def __init__(self, percentage=0.3, test_mode=False, max_lines=None, seed=42):
+        self.seed = seed
         self.percentage = percentage
         self.test_mode = test_mode
         self.max_lines = max_lines
@@ -216,7 +154,7 @@ class ModularityFilter:
             G = load_graph_sparse(input_file, max_lines)
             print(f"Graph: {len(G.nodes())} nodes, {len(G.edges())} edges")
 
-            backbone = SparseModularityBackbone(G).extract_backbone(self.percentage)
+            backbone = SparseModularityBackbone(G, seed=self.seed).extract_backbone(self.percentage)
             print(f"Backbone: {len(backbone.nodes())} nodes, {len(backbone.edges())} edges")
 
             save_backbone_sparse(backbone, output_file)

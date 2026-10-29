@@ -18,6 +18,7 @@ import traceback
 from collections import defaultdict
 
 import pandas as pd
+from input_format import has_header_row
 import psutil
 from tqdm import tqdm
 
@@ -79,7 +80,7 @@ class OneModeProjectionSparse:
         self._log(f"Separator: {repr(sep)} | lines: {total_lines} | chunks: {total_chunks}")
 
         chunk_reader = pd.read_csv(
-            self.filepath, sep=sep, header=None,
+            self.filepath, sep=sep, header=None, skiprows=int(has_header_row(self.filepath, sep)),
             chunksize=self.chunk_size, dtype=str,
             engine='python', skipinitialspace=True,
             usecols=[0, 1]

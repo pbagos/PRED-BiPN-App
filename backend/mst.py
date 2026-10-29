@@ -31,7 +31,9 @@ class KruskalMST:
     def kruskal_maxst(self, edges, num_nodes):
         if num_nodes == 0:
             return []
-        edges_sorted = sorted(edges, key=lambda x: -x[2])
+        # ties broken by node ids (= rank of the sorted node names), so the tree
+        # does not depend on the row order of the input file
+        edges_sorted = sorted(edges, key=lambda x: (-x[2], min(x[0], x[1]), max(x[0], x[1])))
         uf = self.UnionFind(num_nodes)
         maxst_edges = []
         for u, v, w in edges_sorted:

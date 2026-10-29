@@ -17,3 +17,4 @@ psutil>=5.9.0
 NEMtropy>=2.2.0
 statsmodels>=0.14.0
 gunicorn>=23.0.0
+igraph>=0.10

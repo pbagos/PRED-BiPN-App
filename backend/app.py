@@ -9,6 +9,7 @@ from datetime import datetime
 from multiprocessing import Pool, cpu_count
 from urllib.parse import unquote
 from flask import Flask, request, jsonify, send_file, Response
+from werkzeug.utils import secure_filename
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
@@ -45,8 +46,9 @@ from jaccard import run_jaccard_analysis, run_jaccard_dual_analysis, JaccardSimi
 from kendall import run_kendall_analysis
 from spearman import run_spearman_analysis
 from pearson import run_pearson_analysis, run_bipartite_pearson_dual
-from edge_betweenness import run_girvan_newman_analysis
+from edge_betweenness_backbone import run_edge_betweenness_backbone
 from global_threshold import run_global_threshold
+from input_format import normalize_input, is_projection
 
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 app = Flask(__name__, static_folder=frontend_path, static_url_path='')
@@ -111,13 +113,16 @@ def _execute_processing(data, task_id):
             safe_method = method.lower().replace(' ', '_').replace('/', '_')
             ts = datetime.now().strftime('%Y%m%d_%H%M%S')
             alpha = float(data.get('alpha', 0.05))
-            uploaded_filename = data.get('uploaded_file')
+            uploaded_filename = os.path.basename(data.get('uploaded_file'))
             result_files = {}
             response_data = None
 
-            input_path = os.path.join(app.config['UPLOAD_FOLDER'], uploaded_filename)
+            raw_path = os.path.join(app.config['UPLOAD_FOLDER'], uploaded_filename)
             log(f'Starting: {method}')
             log(f'Input file: {uploaded_filename}')
+            # every method reads the same canonical TSV with a header row
+            input_path = os.path.join(app.config['UPLOAD_FOLDER'], f'input_{safe_method}_{ts}.tsv')
+            normalize_input(raw_path, input_path, has_header=data.get('has_header', 'auto'), logger=app.logger)
 
             if method.lower() == 'disparity filter':
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
@@ -137,12 +142,13 @@ def _execute_processing(data, task_id):
 
             elif method.lower() == "doubly stochastic filter":
                 output_path = os.path.join(app.config["UPLOAD_FOLDER"], f'result_{safe_method}_{ts}.tsv')
-                extractor = TrueMultiscaleBackbone(significance_level=alpha)
+                directed = str(data.get('directed', 'false')).lower() == 'true'
+                extractor = TrueMultiscaleBackbone(significance_level=alpha, directed=directed)
                 extractor.extract_backbone(
                     edge_list_path=input_path,
                     output_path=output_path,
                     mode='strict',
-                    nrows=200000,
+                    nrows=None,
                     logger=app.logger
                 )
                 result_files = {'result_file': os.path.basename(output_path)}
@@ -151,6 +157,9 @@ def _execute_processing(data, task_id):
                 base_path = os.path.join(app.config["UPLOAD_FOLDER"], f"result_{safe_method}_{ts}")
                 output_A = base_path + "_A.tsv"
                 output_B = base_path + "_B.tsv"
+                if is_projection(input_path):
+                    raise ValueError('Hierarchical Backbone needs the bipartite (two-column) input file, '
+                                     'not a one-mode projection: both columns contain the same nodes.')
                 extractor = HierarchicalBackboneExtractor(
                     z_threshold=float(data.get('z_threshold', 1.64)),
                     alpha_percentile=int(data.get('alpha_percentile', 95)),
@@ -253,7 +262,8 @@ def _execute_processing(data, task_id):
                 extractor = NoiseCorrectedBackbone(
                     input_file=input_path, output_file=output_path,
                     delta=3.09, alpha_prior=alpha, one_sided=False,
-                    max_workers=cpu_count(), limit=200_000
+                    max_workers=cpu_count(), limit=None,
+                    directed=str(data.get('directed', 'false')).lower() == 'true'
                 )
                 if not extractor.load_data_flexible():
                     raise RuntimeError('Failed to load data for Noise Corrected Filter.')
@@ -305,7 +315,7 @@ def _execute_processing(data, task_id):
 
             elif method.lower() == "polya filter":
                 alpha = float(data.get('alpha', 0.05))
-                a_param = float(data.get('a_parameter', 1.0))
+                a_param = float(data.get('a_parameter', -1))
                 correction_method = data.get('correction_method', 'fdr')
                 directed = str(data.get('directed', 'false')).lower() == 'true'
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
@@ -480,31 +490,18 @@ def _execute_processing(data, task_id):
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "edge betweenness":
-                max_lines = int(data.get('max_lines', 1000))
-                num_processes = int(data.get('num_processes', cpu_count() - 1))
-                early_stopping = str(data.get('early_stopping', 'true')).lower() == 'true'
-                min_communities = int(data.get('min_communities', 2))
-                max_iterations = int(data.get('max_iterations', 20))
-                app.logger.info(f"Starting Girvan-Newman Community Detection")
-                stats, result_files = run_girvan_newman_analysis(
-                    input_file=input_path, output_dir=app.config['UPLOAD_FOLDER'],
-                    max_lines=max_lines, num_processes=num_processes,
-                    early_stopping=early_stopping, min_communities=min_communities,
-                    max_iterations=max_iterations, logger=app.logger, progress_callback=None
+                factor = float(data.get('factor', 1.0))
+                weighted = str(data.get('weighted', 'true')).lower() not in ('false', '0', 'no')
+                sample_size = int(float(data.get('sample_size', 0)))
+                output_path = os.path.join(app.config['UPLOAD_FOLDER'], f'result_{safe_method}_{ts}.tsv')
+                app.logger.info(f"Edge betweenness backbone: factor={factor}, weighted={weighted}, sample_size={sample_size}")
+                stats = run_edge_betweenness_backbone(
+                    input_file=input_path, output_file=output_path,
+                    factor=factor, weighted=weighted, sample_size=sample_size, logger=app.logger
                 )
                 if not stats['success']:
-                    raise RuntimeError(stats.get('error', 'Girvan-Newman failed'))
-                renamed_files = {}
-                for key, fname in result_files.items():
-                    old_path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-                    if os.path.exists(old_path):
-                        ext = os.path.splitext(fname)[1]
-                        new_name = f'result_{safe_method}_{ts}_{key}{ext}'
-                        os.rename(old_path, os.path.join(app.config['UPLOAD_FOLDER'], new_name))
-                        renamed_files[key] = new_name
-                    else:
-                        renamed_files[key] = fname
-                result_files = renamed_files
+                    raise RuntimeError(stats.get('error', 'Edge betweenness backbone failed'))
+                result_files = {'result_file': os.path.basename(output_path)}
                 response_data = {'success': True, 'task_id': task_id, 'files': result_files, 'stats': stats}
 
             elif method.lower() == "simple weighted projection":
@@ -584,7 +581,7 @@ def upload_file():
     if not uploaded_file or not method:
         return jsonify({'success': False, 'message': 'Missing file or method'}), 400
 
-    filename = f"{uuid.uuid4().hex}_{uploaded_file.filename}"
+    filename = f"{uuid.uuid4().hex}_{secure_filename(uploaded_file.filename) or 'upload.txt'}"
     path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     uploaded_file.save(path)
 
@@ -597,14 +594,13 @@ def process_file():
     else:
         raw = dict(request.form)
 
-    uploaded_filename = raw.get('uploaded_file') if isinstance(raw, dict) else None
+    uploaded_filename = os.path.basename(str(raw.get('uploaded_file') or '')) if isinstance(raw, dict) else None
     method = raw.get('method') if isinstance(raw, dict) else None
 
     if not uploaded_filename or not method:
         return jsonify({'success': False, 'message': 'File or method missing'}), 400
 
-    input_path = os.path.join(app.config['UPLOAD_FOLDER'],
-                              uploaded_filename if isinstance(uploaded_filename, str) else uploaded_filename[0])
+    input_path = os.path.join(app.config['UPLOAD_FOLDER'], uploaded_filename)
     if not os.path.exists(input_path):
         return jsonify({'success': False, 'message': 'Input file not found.'}), 404
 
@@ -639,7 +635,7 @@ def get_file_columns():
     if not filename:
         return jsonify({'success': False, 'message': 'No filename provided'}), 400
 
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(filename))
     if not os.path.exists(filepath):
         return jsonify({'success': False, 'message': 'File not found'}), 404
 
@@ -699,8 +695,8 @@ def compare_networks():
         if not before_file or not after_file:
             return jsonify({'success': False, 'message': 'Both files are required'}), 400
 
-        before_path = os.path.join(app.config['UPLOAD_FOLDER'], before_file)
-        after_path = os.path.join(app.config['UPLOAD_FOLDER'], after_file)
+        before_path = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(before_file))
+        after_path = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(after_file))
 
         if not os.path.exists(before_path) or not os.path.exists(after_path):
             return jsonify({'success': False, 'message': 'One of the files was not found'}), 404
