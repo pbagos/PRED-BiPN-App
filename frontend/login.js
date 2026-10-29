@@ -14,7 +14,24 @@ function CORRECTION_PARAM() {
              options: [['fdr_bh', 'Benjamini-Hochberg FDR'], ['bonferroni', 'Bonferroni'], ['none', 'None (raw p-value)']] };
 }
 
+function DIRECTED_PARAM() {
+    return { key: 'directed', label: 'Network type', type: 'select', value: 'false',
+             options: [['false', 'Undirected (A–B = B–A)'], ['true', 'Directed']] };
+}
+
+// shown for every method: the backend otherwise guesses from the first row
+const COMMON_PARAMS = [
+    { key: 'has_header', label: 'First row is a header', type: 'select', value: 'auto',
+      options: [['auto', 'Auto-detect'], ['true', 'Yes'], ['false', 'No']] }
+];
+
+function paramSpecs(method) {
+    return method ? [...(METHOD_PARAMS[method.toLowerCase()] || []), ...COMMON_PARAMS] : null;
+}
+
 const METHOD_PARAMS = {
+    'noise corrected filter':   [DIRECTED_PARAM()],
+    'doubly stochastic filter': [DIRECTED_PARAM()],
     'cosine similarity weighted projection':            [{ key: 'threshold', label: 'Similarity threshold (0–1)', value: 0.5, min: 0, max: 1, step: 0.01 }],
     'adamic adar similarity weighted projection':       [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
     'resource allocation similarity weighted projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
@@ -28,6 +45,11 @@ const METHOD_PARAMS = {
         { key: 'or_threshold', label: 'Odds ratio threshold', value: 1.0, min: 0, step: 0.1 }
     ],
     'high salience skeleton':  [{ key: 'threshold', label: 'Salience threshold (0–1)', value: 0.9, min: 0, max: 1, step: 0.01 }],
+    'edge betweenness': [
+        { key: 'factor', label: 'Keep edges with betweenness ≥ factor × mean', value: 1.0, min: 0, step: 0.1 },
+        { key: 'weighted', label: 'Use edge weights (length = 1/weight)', type: 'select', value: 'true', options: [['true', 'Yes'], ['false', 'No']] },
+        { key: 'sample_size', label: 'Sampled source nodes (0 = exact)', value: 0, min: 0, step: 1 }
+    ],
     'hierarchical backbone': [
         { key: 'z_threshold',     label: 'Z-score threshold', value: 1.64, step: 0.01 },
         { key: 'alpha_percentile', label: 'Alpha percentile (1–100)', value: 95, min: 1, max: 100, step: 1 }
@@ -37,7 +59,7 @@ const METHOD_PARAMS = {
 function renderDynamicParams(method) {
     const panel = document.getElementById('dynamicParamsPanel');
     if (!panel) return;
-    const specs = METHOD_PARAMS[(method || '').toLowerCase()];
+    const specs = paramSpecs(method);
     if (!specs) {
         panel.style.display = 'none';
         panel.innerHTML = '';
@@ -59,7 +81,7 @@ function renderDynamicParams(method) {
 }
 
 function collectDynamicParams(method) {
-    const specs = METHOD_PARAMS[(method || '').toLowerCase()];
+    const specs = paramSpecs(method);
     const out = {};
     if (!specs) return out;
     for (const s of specs) {
@@ -355,7 +377,8 @@ continueBtn.addEventListener('click', async () => {
 
         if (selectedMethod.toLowerCase() === 'polya filter') {
             requestData.alpha = parseFloat(document.getElementById('polyaAlpha')?.value) || 0.05;
-            requestData.a_parameter = parseFloat(document.getElementById('polyaA')?.value) ?? 1.0;
+            const aVal = parseFloat(document.getElementById('polyaA')?.value);
+            requestData.a_parameter = isNaN(aVal) ? -1 : aVal;
             requestData.correction_method = document.getElementById('polyaCorrection')?.value || 'fdr';
             requestData.directed = document.getElementById('polyaDirected')?.value || 'false';
         }
@@ -649,6 +672,50 @@ function showGuideContent() {
             </div>
             <hr style="margin: 2rem 0; border-color: rgba(255,255,255,0.2);">
 
+            <!-- Input format -->
+            <div class="help-main-section">
+                <h3>⨀ Input Format</h3>
+                <p>
+                    The header row is detected automatically; set <strong>First row is a header</strong> to Yes or No
+                    if your first row is misread. Node names are trimmed of surrounding spaces, and names that differ only
+                    by a trailing underscore (e.g. <code>X_OF_BREAST</code> and <code>X_OF_BREAST_</code>) are reported in
+                    the log, since they are counted as different nodes.
+                </p>
+                <p>
+                    Projections are treated as undirected (A&ndash;B is the same edge as B&ndash;A). Noise Corrected,
+                    Doubly Stochastic and Pólya filters offer a <strong>Directed</strong> option for directed networks.
+                    Hierarchical Backbone needs the original two-column bipartite file, not a projection.
+                    The Marginal Likelihood and Pólya filters model integer counts; non-integer weights are
+                    truncated or rounded, and a warning appears in the log.
+                </p>
+            </div>
+
+            <!-- Edge Betweenness -->
+            <div class="help-main-section">
+                <h3>⨀ Edge Betweenness</h3>
+                <p>
+                    The edge betweenness of an edge is the number of shortest paths between node pairs that pass
+                    through it (Girvan &amp; Newman, 2002), computed once for all edges with Brandes' algorithm
+                    (Brandes, 2001). Weights are similarities, so each weight <em>w</em> becomes a length 1/<em>w</em>.
+                    An edge is kept if its betweenness &ge; <em>factor</em> &times; mean betweenness.
+                </p>
+                <p>
+                    <strong>factor</strong> (default 1): larger values give sparser backbones.
+                    <strong>Use edge weights</strong>: No sets every length to 1.
+                    <strong>Sampled source nodes</strong>: 0 computes exact betweenness; a positive number estimates it
+                    from that many random source nodes, for very large networks.
+                    Output: <code>source  target  weight  edge_betweenness</code>, sorted by betweenness.
+                </p>
+                <p class="citation">
+                    Brandes, U. (2001). A faster algorithm for betweenness centrality. <em>Journal of Mathematical
+                    Sociology</em>, 25(2), 163&ndash;177.
+                    <a href="https://doi.org/10.1080/0022250X.2001.9990249" target="_blank" rel="noopener">https://doi.org/10.1080/0022250X.2001.9990249</a><br>
+                    Girvan, M., &amp; Newman, M. E. J. (2002). Community structure in social and biological networks.
+                    <em>PNAS</em>, 99(12), 7821&ndash;7826.
+                    <a href="https://doi.org/10.1073/pnas.122653799" target="_blank" rel="noopener">https://doi.org/10.1073/pnas.122653799</a>
+                </p>
+            </div>
+
             <!-- Data Sources -->
             <div class="help-main-section">
                 <h3>⨀ Data Sources</h3>
@@ -675,7 +742,7 @@ function showGuideContent() {
                         <strong>Languages:</strong> Python, JavaScript, HTML/CSS
                     </div>
                     <div class="spec-item">
-                        <strong>Libraries:</strong> NetworkX, Pandas, SciPy, NumPy, Scikit-learn
+                        <strong>Libraries:</strong> NetworkX, igraph, Pandas, SciPy, NumPy, Scikit-learn
                     </div>
                     <div class="spec-item">
                         <strong>Parallel Processing:</strong> Multiprocessing support for large-scale networks
@@ -731,7 +798,7 @@ function hideGuideContent() {
     }
 
     const dpHide = document.getElementById('dynamicParamsPanel');
-    if (dpHide) dpHide.style.display = (selectedMethod && METHOD_PARAMS[selectedMethod.toLowerCase()]) ? 'block' : 'none';
+    if (dpHide) dpHide.style.display = selectedMethod ? 'block' : 'none';
 
     if (downloadSection) downloadSection.style.display = 'none';
     if (previewBox) previewBox.style.display = 'none';
@@ -863,7 +930,7 @@ function hideInfoContent() {
     }
 
     const dpInfoHide = document.getElementById('dynamicParamsPanel');
-    if (dpInfoHide) dpInfoHide.style.display = (selectedMethod && METHOD_PARAMS[selectedMethod.toLowerCase()]) ? 'block' : 'none';
+    if (dpInfoHide) dpInfoHide.style.display = selectedMethod ? 'block' : 'none';
 
     if (downloadSection) downloadSection.style.display = 'none';
 

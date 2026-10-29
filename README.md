@@ -86,6 +86,9 @@ Each method shows only the parameters it needs:
 - Similarity methods: a similarity threshold; node pairs scoring below it are dropped. Cosine and Jaccard are bounded to the 0-1 range, and a value outside it is rejected with an error. Adamic-Adar and Resource Allocation are unbounded (their scores can exceed 1), so any non-negative threshold is allowed.
 - Correlation methods (Pearson, Spearman, Kendall) and Odds Ratio: a significance level alpha (default 0.05) and a multiple-testing correction, Benjamini-Hochberg FDR (default), Bonferroni, or None. Only statistically significant pairs are kept, so these methods do not collapse into a near-complete graph on sparse data.
 - Backbone filters: a significance level, z-score, or threshold appropriate to the method.
+- Edge Betweenness: computes the betweenness of every edge once (Brandes 2001; Girvan & Newman 2002), with weights turned into lengths 1/w, and keeps edges with betweenness >= factor x mean (default factor 1). Options: use weights (yes/no) and a number of sampled source nodes (0 = exact). Install `igraph` for speed; without it NetworkX gives the same result more slowly.
+- Noise Corrected, Doubly Stochastic and Polya: undirected by default (A-B and B-A are one edge), with a Directed option. Polya defaults to a = -1 (maximum-likelihood estimate of a).
+- Every method: a "First row is a header" option (auto-detect by default). Hierarchical Backbone needs the original two-column bipartite file and rejects a projection.
 
 Results are written as tab-separated (TSV) files:
 
@@ -93,6 +96,7 @@ Results are written as tab-separated (TSV) files:
 - Similarity methods write `source  target  weight`.
 - Correlation methods write `source  target  <statistic>  p_value`, where the statistic is `pearson_r`, `spearman_rho`, or `kendall_tau`; Odds Ratio writes `source  target  odds_ratio  p_value`.
 - Backbone filters write `source  target  weight` (some add a method-specific column, such as the Disparity Filter's alpha).
+- Edge Betweenness writes `source  target  weight  edge_betweenness`, sorted by betweenness.
 
 ## Troubleshooting
 
