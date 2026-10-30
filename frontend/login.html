@@ -1,177 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="login.css">
-    <title>PRED-BiPN: Bipartite Network Projection Tool</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRED-BiPN</title>
+<link rel="icon" href="o.png">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="login.css">
+<script>// apply the saved light/dark choice before first paint
+  try { if (localStorage.getItem('theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}</script>
 </head>
 <body>
 
-    <div id="topBar" class="top-bar">
-        <span class="top-bar-title">
-            <img src="o.png" alt="PRED-BiPN Logo" class="logo-icon">
-            PRED-BiPN
-        </span>
-        <div class="top-buttons">
-            <button id="mainPageBtn" class="top-btn main-page-btn">Tool</button>
-            <button id="helpBtn" class="top-btn">Help</button>
-            <button id="infoBtn" class="top-btn">Info</button>
-        </div>
-        <div id="userInfoBar" class="user-info">
-            <span class="user-icon"></span>
-        </div>
-    </div>
+<header class="bar">
+  <div class="logo"><svg viewBox="0 0 22 22" aria-hidden="true"><g stroke="#7fb4e3" stroke-width="1.2"><path d="M5 5 17 8M5 5 17 15M5 11 17 8M5 17 17 15"/></g><circle cx="5" cy="5" r="2.2" fill="#4fc2b8"/><circle cx="5" cy="11" r="2.2" fill="#4fc2b8"/><circle cx="5" cy="17" r="2.2" fill="#4fc2b8"/><circle cx="17" cy="8" r="2.2" fill="#e39a62"/><circle cx="17" cy="15" r="2.2" fill="#e39a62"/></svg>PRED-BiPN</div>
+  <nav><a href="#tool" data-page="tool">Tool</a><a href="#help" data-page="help">Help</a><a href="#info" data-page="info">Info</a></nav>
+  <div class="sp"></div>
+  <button class="theme" id="theme" aria-label="Switch light or dark theme">Light / dark</button>
+</header>
 
-    <div class="sidebar"></div>
+<main class="wrap" id="page-tool">
+  <div class="intro">
+    <h1>Bipartite projection and backbone extraction</h1>
+    <p>Project a two-mode network onto one node set, then keep only its significant edges.</p>
+  </div>
+  <div class="grid">
+    <section aria-label="Set up a run">
+      <div class="card" id="c1"></div>
+      <div class="card" id="c2"></div>
+      <div class="card" id="c3"></div>
+    </section>
+    <section aria-label="Result">
+      <div class="card" id="work" aria-live="polite"></div>
+      <div id="extra"></div>
+    </section>
+  </div>
+</main>
 
-    <div id="mainPanel" class="main-panel">
+<main class="wrap doc" id="page-help" hidden>
+  <h1>Guide</h1>
+  <p class="lead">How to use PRED-BiPN, and what the methods do.</p>
 
-        <div id="methodPanel" class="method-panel">
-            <div id="methodDropdownGroup" class="method-dropdown-group">
-                <div class="method-dropdown">
-                    <button id="projectionsBtn" class="method-dropdown-btn">
-                        Bipartite Projections
-                        <span class="dropdown-arrow">▼</span>
-                    </button>
-                    <ul id="projectionsOptions" class="method-dropdown-list">
-                        <li>Hypergraph Projection</li>
-                        <li>Odds Ratio Weighted Projection</li>
-                        <li>Cosine Similarity Weighted Projection</li>
-                        <li>Adamic Adar Similarity Weighted Projection</li>
-                        <li>Resource Allocation Similarity Weighted Projection</li>
-                        <li>Jaccard Similarity Weighted Projection</li>
-                        <li>Kendall Correlation Weighted Projection</li>
-                        <li>Spearman Correlation Weighted Projection</li>
-                        <li>Pearson Correlation Weighted Projection</li>
-                        <li>Simple Weighted Projection</li>
-                        <li>One Mode Projection</li>
-                    </ul>
-                </div>
-                <div class="method-dropdown">
-                    <button id="backboneBtn" class="method-dropdown-btn">
-                        Backbone Extraction
-                        <span class="dropdown-arrow">▼</span>
-                    </button>
-                    <ul id="backboneOptions" class="method-dropdown-list">
-                        <li>Disparity Filter</li>
-                        <li>Doubly Stochastic Filter</li>
-                        <li>Hierarchical Backbone</li>
-                        <li>High Salience Skeleton</li>
-                        <li>Locally Adaptive Network Sparsification Filter</li>
-                        <li>Marginal Likelihood Filter</li>
-                        <li>Maximum Spanning Tree Filter</li>
-                        <li>Modularity Filter</li>
-                        <li>Noise Corrected Filter</li>
-                        <li>Global Threshold Filter</li>
-                        <li>Edge Betweenness</li>
-                        <li>Polya Filter</li>
-                    </ul>
-                </div>
-            </div>
+  <h2>Using the tool</h2>
+  <ol class="steps">
+    <li><b>Choose a method.</b> <i>Projections</i> turn a bipartite network (e.g. gene → disease) into a one-mode network of one node set. <i>Backbone extraction</i> keeps only the significant edges of a weighted one-mode network. Use the search box to find a method by name or by what it does; its parameters appear under <b>Run</b>.</li>
+    <li><b>Add an edge list.</b> Drop a .txt, .tsv or .csv file, or choose one. Use two columns for a bipartite network (node type A, node type B), or three for a weighted one-mode network (source, target, weight). The page checks the file at once: header row, bipartite or one-mode, number of nodes, and names that differ only by a trailing <code>_</code>.</li>
+    <li><b>Run.</b> Set the parameters and click <b>Run</b>. Correlation and odds-ratio methods take a significance level α (default 0.05) and a multiple-testing correction: Benjamini–Hochberg FDR (default), Bonferroni or none. Similarity and salience methods take a threshold between 0 and 1. Stricter settings keep fewer edges.</li>
+    <li><b>Use the result.</b> A projection gives one network per node set; download either, or choose <b>Use for backbone</b> to filter it straight away. A backbone shows the nodes, edges and components kept; <b>Compare networks</b> draws the input and the backbone side by side.</li>
+  </ol>
 
-            <button id="uploadBtn" class="panel-button">Upload file</button>
-            <button id="continueBtn" class="panel-button">Run Method</button>
+  <h2>Input format</h2>
+  <p>The header row is detected automatically; set <b>First row is a header</b> to Yes or No if your first row is misread. Node names are trimmed of surrounding spaces, and names that differ only by a trailing underscore (e.g. <code>X_OF_BREAST</code> and <code>X_OF_BREAST_</code>) are reported, since they are counted as different nodes.</p>
+  <p>Projections are treated as undirected (A–B is the same edge as B–A). Noise Corrected, Doubly Stochastic and Pólya filters offer a <b>Directed</b> option for directed networks. Hierarchical Backbone needs the original two-column bipartite file, not a projection. The Marginal Likelihood and Pólya filters model integer counts; non-integer weights are truncated or rounded, and a warning appears in the log.</p>
 
-            <input type="file" id="fileInput" class="file-input" />
+  <h2>Edge Betweenness</h2>
+  <p>The edge betweenness of an edge is the number of shortest paths between node pairs that pass through it (Girvan &amp; Newman, 2002), computed once for all edges with Brandes' algorithm (Brandes, 2001). Weights are similarities, so each weight <i>w</i> becomes a length 1/<i>w</i>. An edge is kept if its betweenness ≥ <i>factor</i> × mean betweenness.</p>
+  <p><b>Factor</b> (default 1): larger values give sparser backbones. <b>Use edge weights</b>: No sets every length to 1. <b>Sampled source nodes</b>: 0 computes exact betweenness; a positive number estimates it from that many random source nodes, for very large networks. Output: <code>source target weight edge_betweenness</code>, sorted by betweenness.</p>
+  <p class="cite">Brandes, U. (2001). A faster algorithm for betweenness centrality. <i>Journal of Mathematical Sociology</i>, 25(2), 163–177. <a href="https://doi.org/10.1080/0022250X.2001.9990249" target="_blank" rel="noopener">doi:10.1080/0022250X.2001.9990249</a><br>
+  Girvan, M., &amp; Newman, M. E. J. (2002). Community structure in social and biological networks. <i>PNAS</i>, 99(12), 7821–7826. <a href="https://doi.org/10.1073/pnas.122653799" target="_blank" rel="noopener">doi:10.1073/pnas.122653799</a></p>
 
-            <div id="filePreviewBox" class="file-preview-box"></div>
-        </div>
+  <h2>Noise Corrected Filter</h2>
+  <p>Computed exactly as in the authors' reference code (<code>backboning.py</code>). The weight of each edge is modelled as a binomial draw whose success probability has a Beta prior, fitted by the method of moments to the expected value <i>N<sub>i</sub>N<sub>j</sub></i>/<i>N</i>². Each edge gets a score and its standard deviation, and is kept if score − δ × sd &gt; 0. In an undirected network every edge counts in both directions, so <i>N</i> = 2 × total weight.</p>
+  <p><b>Threshold δ</b> (default 3.09). <b>Network type</b>: Undirected (default) or Directed.</p>
+  <p class="cite">Coscia, M., &amp; Neffke, F. M. H. (2017). Network backboning with noisy data. <i>2017 IEEE 33rd International Conference on Data Engineering (ICDE)</i>, 425–436. <a href="https://doi.org/10.1109/ICDE.2017.100" target="_blank" rel="noopener">doi:10.1109/ICDE.2017.100</a></p>
 
-        <div id="paramField" class="param-field">
-            <label for="alphaInput" class="param-label"> a (significance level):</label>
-            <input type="number" id="alphaInput" class="param-input" min="0" max="1" step="0.001" value="0.05" />
-        </div>
+  <h2>Doubly Stochastic Filter</h2>
+  <p>The weight matrix (symmetric for an undirected network) plus 0.0001 in every cell, as in the reference code, is scaled with the Sinkhorn–Knopp algorithm until every row and column sums to 1. The constant makes the scaling exist: a sparse matrix often has none. Edges are then taken in decreasing order of their scaled value.</p>
+  <p><b>Stopping rule</b>: <i>Slater</i> (default) adds edges until the backbone has as many connected components as the input (one for a connected network). On networks that are not connected this keeps most edges. <i>Strict</i> is a PRED-BiPN heuristic, not part of Slater's method: edges below the significance level α are skipped, it stops at the 20th percentile of the values, and every 1,000 edges it stops if the nodes reached form one component. <b>α</b> (default 0.05) is used by the Strict rule only. <b>Network type</b>: Undirected (default) or Directed.</p>
+  <p class="cite">Slater, P. B. (2009). A two-stage algorithm for extracting the multiscale backbone of complex weighted networks. <i>PNAS</i>, 106(26), E66. <a href="https://doi.org/10.1073/pnas.0904725106" target="_blank" rel="noopener">doi:10.1073/pnas.0904725106</a><br>
+  Sinkhorn, R., &amp; Knopp, P. (1967). Concerning nonnegative matrices and doubly stochastic matrices. <i>Pacific Journal of Mathematics</i>, 21(2), 343–348. <a href="https://doi.org/10.2140/pjm.1967.21.343" target="_blank" rel="noopener">doi:10.2140/pjm.1967.21.343</a></p>
 
-        <div id="dynamicParamsPanel" class="param-field" style="display: none;"></div>
+  <h2>Modularity Filter</h2>
+  <p>Algorithm 1 of Rajeh et al. (2022). The network is split into communities with the Louvain method (weighted, fixed seed). The modularity vitality of each node, α(<i>v</i>) = Q(G) − Q(G without <i>v</i>), is computed once on the original network with that partition, using weighted modularity. The backbone is the subgraph induced by the nodes with the largest |α(<i>v</i>)|. Nodes with equal |α| are taken in alphabetical order.</p>
+  <p><b>Share of nodes kept</b> (default 0.30, rounded up). <b>Louvain seed</b> (default 42): the partition, and so the backbone, depends on it. <b>Keep only largest component</b> (default No): the article keeps the largest connected component of the backbone. Projections are often fragmented from the start, so this would drop every small component.</p>
+  <p class="cite">Rajeh, S., Savonnet, M., Leclercq, E., &amp; Cherifi, H. (2022). Modularity-based backbone extraction in weighted complex networks. In <i>Network Science (NetSci-X 2022)</i>, 67–79. Springer. <a href="https://doi.org/10.1007/978-3-030-97240-0_6" target="_blank" rel="noopener">doi:10.1007/978-3-030-97240-0_6</a></p>
 
-        <div id="polyaPanel" class="global-threshold-panel" style="display: none;">
-            <div class="threshold-header">
-                <h4>Polya Filter Parameters</h4>
-            </div>
-            <div class="threshold-controls">
-                <div class="threshold-group">
-                    <label for="polyaAlpha">Significance level (α):</label>
-                    <input type="number" id="polyaAlpha" class="threshold-input" min="0.001" max="1" step="0.001" value="0.05" />
-                </div>
-                <div class="threshold-group">
-                    <label for="polyaA">Parameter a (−1 = ML estimation, 1 = disparity filter):</label>
-                    <input type="number" id="polyaA" class="threshold-input" min="-1" max="15" step="0.1" value="-1" />
-                </div>
-                <div class="threshold-group">
-                    <label for="polyaCorrection">Multiple testing correction:</label>
-                    <select id="polyaCorrection" class="threshold-select">
-                        <option value="fdr">FDR (Benjamini-Hochberg)</option>
-                        <option value="bonferroni">Bonferroni</option>
-                    </select>
-                </div>
-                <div class="threshold-group">
-                    <label for="polyaDirected">Network type:</label>
-                    <select id="polyaDirected" class="threshold-select">
-                        <option value="false">Undirected</option>
-                        <option value="true">Directed</option>
-                    </select>
-                </div>
-            </div>
-        </div>
+  <h2>Data sources</h2>
+  <p>The gene–disease association data used to validate the methods comes from:</p>
+  <p class="cite">Kontou, P. I., Pavlopoulou, A., Dimou, N. L., Pavlopoulos, G. A., &amp; Bagos, P. G. (2016). Network analysis of genes and their association with diseases. <i>Gene</i>, 590(1), 68–78. <a href="https://doi.org/10.1016/j.gene.2016.05.044" target="_blank" rel="noopener">doi:10.1016/j.gene.2016.05.044</a></p>
+  <p>The tool is not limited to this dataset: any bipartite or weighted edge list works.</p>
 
-    <div id="globalThresholdPanel" class="global-threshold-panel" style="display: none;">
-        <div class="threshold-header">
-            <h4>Global Threshold Filter</h4>
-            <p>   </p>
-        </div>
-        <div class="threshold-controls">
-            <div class="threshold-group">
-                <label for="thresholdColumn">Select Column:</label>
-                <select id="thresholdColumn" class="threshold-select">
-                    <option value="auto">Auto-detect (first numeric column)</option>
-                </select>
-            </div>
-            <div class="threshold-group">
-                <label for="thresholdDirection">Direction:</label>
-                <select id="thresholdDirection" class="threshold-select">
-                    <option value="greater">Greater than or equal (≥)</option>
-                    <option value="less">Less than or equal (≤)</option>
-                </select>
-            </div>
-            <div class="threshold-group">
-                <label for="thresholdValue">Threshold Value:</label>
-                <input type="number" id="thresholdValue" class="threshold-input" step="any" value="0.5">
-            </div>
-            <button id="applyThresholdBtn" class="panel-button-results">Apply Filter</button>
-        </div>
-        <div id="columnPreview" class="column-preview" style="display: none;">
-            <small>Detected columns: <span id="detectedColumns"></span></small>
-        </div>
-    </div>
+  <h2>Technical specifications</h2>
+  <dl class="specs">
+    <dt>Languages</dt><dd>Python, JavaScript, HTML/CSS</dd>
+    <dt>Libraries</dt><dd>NetworkX, igraph, Pandas, SciPy, NumPy, scikit-learn</dd>
+    <dt>Parallel processing</dt><dd>Multiprocessing support for large-scale networks</dd>
+    <dt>Export format</dt><dd>TSV</dd>
+  </dl>
+  <p><a class="btn" href="#tool">← Back to the tool</a></p>
+</main>
 
-        <div id="processingPanel" class="processing-panel" style="display: none;">
-            <div class="proc-header">
-                <div class="proc-title-row">
-                    <span class="proc-spinner"></span>
-                    <span class="proc-label">Running: </span>
-                    <span id="procMethodLabel" class="proc-method-label"></span>
-                </div>
-            </div>
-            <div class="progress-track">
-                <div id="progressBarFill" class="progress-fill"></div>
-            </div>
-            <div id="terminalOutput" class="terminal-output"></div>
-        </div>
-
-        <div id="downloadSection" class="download-section">
-            <h3 class="download-title">Processing Complete</h3>
-            <p id="downloadMessage"></p>
-            <div class="download-buttons-row">
-                <button id="downloadBtn" class="panel-button-results download-button">Download Result</button>
-                <button id="compareNetworksInlineBtn" class="panel-button-results">Compare Networks</button>
-                <button id="hideComparisonBtn" class="panel-button-results" style="display: none;">Hide Comparison</button>
-            </div>
-        </div>
-
-    </div>
-
-    <script src="login.js"></script>
+<main class="wrap doc" id="page-info" hidden>
+  <h1>Credits</h1>
+  <p class="lead">The people behind PRED-BiPN.</p>
+  <h2>Development</h2>
+  <ul class="people">
+    <li><b>Efstathios Voulgaris</b><span>Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</span></li>
+    <li><b>Ioannis Charatsiaris</b><span>Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</span></li>
+  </ul>
+  <h2>Academic supervision</h2>
+  <ul class="people">
+    <li><b>Pantelis Bagos, Professor</b><span>Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece · <a href="mailto:pbagos@compgen.org">pbagos@compgen.org</a></span></li>
+    <li><b>Panagiota I. Kontou, Assistant Professor</b><span>Department of Mathematics, University of Thessaly, 35131 Lamia, Greece · <a href="mailto:pkontou@uth.gr">pkontou@uth.gr</a></span></li>
+  </ul>
+  <p><a class="btn" href="#tool">← Back to the tool</a></p>
+</main>
+<input type="file" id="file" class="sr" accept=".txt,.tsv,.csv" tabindex="-1" aria-hidden="true">
+<script src="login.js"></script>
 </body>
 </html>

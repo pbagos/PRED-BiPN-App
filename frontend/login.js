@@ -1,1490 +1,475 @@
+// PRED-BiPN interface: method -> edge list -> run. Talks to the Flask routes
+// /upload, /process, /task_status, /download and /visualize/compare.
 
-
-const API_BASE = '';
-
-const ALPHA_METHODS = [
-    'disparity filter',
-    'doubly stochastic filter',
-    'locally adaptive network sparsification filter',
-    'marginal likelihood filter'
-];
-
-function CORRECTION_PARAM() {
-    return { key: 'correction', label: 'Multiple-testing correction', type: 'select', value: 'fdr_bh',
-             options: [['fdr_bh', 'Benjamini-Hochberg FDR'], ['bonferroni', 'Bonferroni'], ['none', 'None (raw p-value)']] };
-}
-
-function DIRECTED_PARAM() {
-    return { key: 'directed', label: 'Network type', type: 'select', value: 'false',
-             options: [['false', 'Undirected (A–B = B–A)'], ['true', 'Directed']] };
-}
-
-// shown for every method: the backend otherwise guesses from the first row
-const COMMON_PARAMS = [
-    { key: 'has_header', label: 'First row is a header', type: 'select', value: 'auto',
-      options: [['auto', 'Auto-detect'], ['true', 'Yes'], ['false', 'No']] }
-];
-
-function paramSpecs(method) {
-    return method ? [...(METHOD_PARAMS[method.toLowerCase()] || []), ...COMMON_PARAMS] : null;
-}
-
-const METHOD_PARAMS = {
-    'noise corrected filter':   [DIRECTED_PARAM()],
-    'doubly stochastic filter': [DIRECTED_PARAM()],
-    'cosine similarity weighted projection':            [{ key: 'threshold', label: 'Similarity threshold (0–1)', value: 0.5, min: 0, max: 1, step: 0.01 }],
-    'adamic adar similarity weighted projection':       [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
-    'resource allocation similarity weighted projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
-    'jaccard similarity weighted projection':           [{ key: 'threshold', label: 'Jaccard threshold (0–1)', value: 0.0, min: 0, max: 1, step: 0.01 }],
-    'kendall correlation weighted projection':          [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
-    'spearman correlation weighted projection':         [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
-    'pearson correlation weighted projection':          [CORRECTION_PARAM(), { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 }],
-    'odds ratio weighted projection': [
-        CORRECTION_PARAM(),
-        { key: 'alpha', label: 'Significance level α', value: 0.05, min: 0.0001, max: 1, step: 0.005 },
-        { key: 'or_threshold', label: 'Odds ratio threshold', value: 1.0, min: 0, step: 0.1 }
-    ],
-    'high salience skeleton':  [{ key: 'threshold', label: 'Salience threshold (0–1)', value: 0.9, min: 0, max: 1, step: 0.01 }],
-    'edge betweenness': [
-        { key: 'factor', label: 'Keep edges with betweenness ≥ factor × mean', value: 1.0, min: 0, step: 0.1 },
-        { key: 'weighted', label: 'Use edge weights (length = 1/weight)', type: 'select', value: 'true', options: [['true', 'Yes'], ['false', 'No']] },
-        { key: 'sample_size', label: 'Sampled source nodes (0 = exact)', value: 0, min: 0, step: 1 }
-    ],
-    'hierarchical backbone': [
-        { key: 'z_threshold',     label: 'Z-score threshold', value: 1.64, step: 0.01 },
-        { key: 'alpha_percentile', label: 'Alpha percentile (1–100)', value: 95, min: 1, max: 100, step: 1 }
-    ]
+// [backend name, display name, one-line description]
+const METHODS = {
+  proj: [
+    ['Simple Weighted Projection', 'Simple Weighted Projection', 'Weight = number of shared neighbours'],
+    ['One Mode Projection', 'One Mode Projection', 'An edge if any neighbour is shared'],
+    ['Hypergraph Projection', 'Hypergraph Projection', 'Shared memberships as a hypergraph'],
+    ['Jaccard Similarity Weighted Projection', 'Jaccard Similarity', 'Shared ÷ union of neighbours'],
+    ['Cosine Similarity Weighted Projection', 'Cosine Similarity', 'Shared ÷ √(degree × degree)'],
+    ['Adamic Adar Similarity Weighted Projection', 'Adamic–Adar Similarity', 'Shared neighbours weighted by 1 / log degree'],
+    ['Resource Allocation Similarity Weighted Projection', 'Resource Allocation Similarity', 'Shared neighbours weighted by 1 / degree'],
+    ['Odds Ratio Weighted Projection', 'Odds Ratio', '2×2 association test with p-values'],
+    ['Pearson Correlation Weighted Projection', 'Pearson Correlation', 'Correlation of membership vectors'],
+    ['Spearman Correlation Weighted Projection', 'Spearman Correlation', 'Rank correlation of membership vectors'],
+    ['Kendall Correlation Weighted Projection', 'Kendall Correlation', 'Kendall τ of membership vectors'],
+  ],
+  bb: [
+    ['Disparity Filter', 'Disparity Filter', 'Serrano et al. 2009 · edges significant for a node\'s strength'],
+    ['Polya Filter', 'Pólya Filter', 'Marcaccioli & Livan 2019 · Pólya-urn null model'],
+    ['Noise Corrected Filter', 'Noise Corrected Filter', 'Coscia & Neffke 2017 · binomial test of the weight'],
+    ['Marginal Likelihood Filter', 'Marginal Likelihood Filter', 'Dianati 2016 · binomial test on integer weights'],
+    ['Doubly Stochastic Filter', 'Doubly Stochastic Filter', 'Slater 2009 · strongest normalised edges until connected'],
+    ['High Salience Skeleton', 'High Salience Skeleton', 'Grady et al. 2012 · edges on many shortest-path trees'],
+    ['Locally Adaptive Network Sparsification Filter', 'Locally Adaptive Network Sparsification', 'Foti et al. 2011 · rank within each node'],
+    ['Maximum Spanning Tree Filter', 'Maximum Spanning Tree', 'Kruskal · strongest tree over all nodes'],
+    ['Edge Betweenness', 'Edge Betweenness', 'Brandes 2001 · betweenness ≥ factor × mean'],
+    ['Modularity Filter', 'Modularity Filter', 'Rajeh et al. 2022 · keep nodes of largest modularity vitality'],
+    ['Hierarchical Backbone', 'Hierarchical Backbone', 'BiCM null model · needs the bipartite file'],
+    ['Global Threshold Filter', 'Global Threshold Filter', 'Keep edges above or below a fixed value'],
+  ],
 };
 
-function renderDynamicParams(method) {
-    const panel = document.getElementById('dynamicParamsPanel');
-    if (!panel) return;
-    const specs = paramSpecs(method);
-    if (!specs) {
-        panel.style.display = 'none';
-        panel.innerHTML = '';
-        return;
-    }
-    panel.innerHTML = specs.map(s => {
-        const lbl = `<label class="param-label" for="dp_${s.key}">${s.label}:</label>`;
-        if (s.type === 'select') {
-            const opts = s.options.map(([v, t]) =>
-                `<option value="${v}"${v === s.value ? ' selected' : ''}>${t}</option>`
-            ).join('');
-            return lbl + `<select id="dp_${s.key}" class="param-input">${opts}</select>`;
-        }
-        return lbl +
-            `<input type="number" id="dp_${s.key}" class="param-input" value="${s.value}"` +
-            `${s.min != null ? ` min="${s.min}"` : ''}${s.max != null ? ` max="${s.max}"` : ''} step="${s.step || 'any'}" />`;
-    }).join('');
-    panel.style.display = 'block';
-}
-
-function collectDynamicParams(method) {
-    const specs = paramSpecs(method);
-    const out = {};
-    if (!specs) return out;
-    for (const s of specs) {
-        const el = document.getElementById('dp_' + s.key);
-        if (!el) continue;
-        if (s.type === 'select') {
-            out[s.key] = el.value;
-        } else if (el.value !== '' && !isNaN(parseFloat(el.value))) {
-            out[s.key] = parseFloat(el.value);
-        }
-    }
-    return out;
-}
-
-let latestTaskId = null;
-let selectedMethod = null;
-let selectedCategory = null;
-let lastUploadedFormData = null;
-let currentMethod = null;
-let currentResultFile = null;
-
-function showFieldError(inputId, message) {
-    const input = document.getElementById(inputId);
-    if (!input) return;
-
-    input.classList.add('error');
-    let existingMessage = input.nextElementSibling;
-    if (existingMessage && existingMessage.classList.contains('error-message')) {
-        existingMessage.remove();
-    }
-
-    const errorSpan = document.createElement('div');
-    errorSpan.className = 'error-message';
-    errorSpan.textContent = message;
-    input.insertAdjacentElement('afterend', errorSpan);
-}
-
-function clearFieldErrors() {
-    document.querySelectorAll('input').forEach(input => {
-        input.classList.remove('error');
-        let errorElem = input.nextElementSibling;
-        if (errorElem && errorElem.classList.contains('error-message')) {
-            errorElem.remove();
-        }
-    });
-}
-
-async function downloadFile(url, filename) {
-    const response = await fetch(url, {
-        method: 'GET',
-        credentials: 'include'
-    });
-
-    if (!response.ok) {
-        throw new Error('File download failed');
-    }
-
-    const blob = await response.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-}
-
-function setupChooseMethod() {
-    const projectionsBtn = document.getElementById('projectionsBtn');
-    const backboneBtn = document.getElementById('backboneBtn');
-    const projectionsOptions = document.getElementById('projectionsOptions');
-    const backboneOptions = document.getElementById('backboneOptions');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const fileInput = document.getElementById('fileInput');
-    const previewBox = document.getElementById('filePreviewBox');
-    const continueBtn = document.getElementById('continueBtn');
-    const paramField = document.getElementById('paramField');
-    const downloadSection = document.getElementById('downloadSection');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const downloadMessage = document.getElementById('downloadMessage');
-
-    continueBtn.style.display = 'none';
-
-    function closeAllDropdowns() {
-        if (projectionsOptions) projectionsOptions.style.display = 'none';
-        if (backboneOptions) backboneOptions.style.display = 'none';
-    }
-
-    function onMethodSelected(item, sourceBtn) {
-        selectedMethod = item.textContent.replace(/^\d+\.\s*/, '').trim();
-        selectedCategory = (sourceBtn === backboneBtn) ? 'backbone' : 'projection';
-        projectionsBtn.innerHTML = 'Bipartite Projections <span class="dropdown-arrow">▼</span>';
-        backboneBtn.innerHTML = 'Backbone Extraction <span class="dropdown-arrow">▼</span>';
-        sourceBtn.innerHTML = selectedMethod + ' <span class="dropdown-arrow">▼</span>';
-        closeAllDropdowns();
-
-        hideVisualization();
-        hideAllScreens();
-
-        previewBox.style.display = 'none';
-        previewBox.textContent = '';
-        fileInput.value = '';
-        lastUploadedFormData = null;
-        downloadSection.style.display = 'none';
-
-        const polyaPanel = document.getElementById('polyaPanel');
-        if (ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
-            paramField.style.display = 'block';
-        } else {
-            paramField.style.display = 'none';
-        }
-        if (polyaPanel) {
-            polyaPanel.style.display = selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
-        }
-        const globalThresholdPanel = document.getElementById('globalThresholdPanel');
-        if (globalThresholdPanel) {
-            if (selectedMethod.toLowerCase() === 'global threshold filter') {
-                globalThresholdPanel.style.display = 'block';
-                const uploadedFile = sessionStorage.getItem('uploaded_file');
-                if (uploadedFile) {
-                    fetch(`${API_BASE}/get_file_columns?filename=${uploadedFile}`)
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.success && typeof updateThresholdPanel === 'function') {
-                                updateThresholdPanel(data.columns);
-                            }
-                        })
-                        .catch(() => {});
-                }
-            } else {
-                globalThresholdPanel.style.display = 'none';
-            }
-        }
-
-        renderDynamicParams(selectedMethod);
-    }
-
-    projectionsBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        const isOpen = projectionsOptions.style.display === 'block';
-        closeAllDropdowns();
-        if (!isOpen) projectionsOptions.style.display = 'block';
-    });
-
-    backboneBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        const isOpen = backboneOptions.style.display === 'block';
-        closeAllDropdowns();
-        if (!isOpen) backboneOptions.style.display = 'block';
-    });
-
-    document.addEventListener('click', e => {
-        if (!projectionsBtn.contains(e.target) && !projectionsOptions.contains(e.target) &&
-            !backboneBtn.contains(e.target) && !backboneOptions.contains(e.target)) {
-            closeAllDropdowns();
-        }
-    });
-
-    document.querySelectorAll('#projectionsOptions li').forEach(item => {
-        item.addEventListener('click', () => onMethodSelected(item, projectionsBtn));
-    });
-
-    document.querySelectorAll('#backboneOptions li').forEach(item => {
-        item.addEventListener('click', () => onMethodSelected(item, backboneBtn));
-    });
-
-    uploadBtn.addEventListener('click', () => {
-        if (!selectedMethod) {
-            alert('Please select a method first.');
-            return;
-        }
-        fileInput.click();
-    });
-
-    fileInput.addEventListener('change', async event => {
-        const file = event.target.files[0];
-        if (!file) {
-            previewBox.style.display = 'none';
-            continueBtn.style.display = 'none';
-            lastUploadedFormData = null;
-            return;
-        }
-
-        const allowedTypes = ['text/plain', 'text/csv'];
-        const allowedExtensions = ['.txt', '.csv', '.tsv'];
-        const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-
-        if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExtension)) {
-            alert('Please select a .txt, .csv, or .tsv file');
-            fileInput.value = '';
-            previewBox.style.display = 'none';
-            continueBtn.style.display = 'none';
-            lastUploadedFormData = null;
-            return;
-        }
-
-        previewBox.style.display = 'block';
-        previewBox.textContent = `📄 ${file.name}\n\nLoading content...`;
-
-        const reader = new FileReader();
-        reader.onload = e => {
-            const content = e.target.result;
-
-            const lines = content.split('\n').slice(0, 10).join('\n');
-            previewBox.textContent = `📄 ${file.name}\n\nFirst 10 lines:\n${lines}`;
-        };
-        reader.readAsText(file);
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('method', selectedMethod);
-
-        if (ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
-            const alphaValue = document.getElementById('alphaInput')?.value || 0.05;
-            formData.append('alpha', alphaValue);
-        }
-
-        lastUploadedFormData = formData;
-
-        try {
-            const response = await fetch(`${API_BASE}/upload`, {
-                method: 'POST',
-                body: formData,
-                credentials: 'include'
-            });
-
-            const data = await response.json();
-            if (data.success) {
-                sessionStorage.setItem('uploaded_file', data.uploaded_file);
-                alert('File uploaded successfully! You can now click "Run Method" to process it.');
-                continueBtn.style.display = 'inline-block';
-            } else {
-                alert(data.message || 'File upload error. Please check your file format.');
-                continueBtn.style.display = 'none';
-                lastUploadedFormData = null;
-            }
-        } catch (err) {
-            alert('Network error during upload. Please check your connection.');
-            continueBtn.style.display = 'none';
-            lastUploadedFormData = null;
-            console.error(err);
-        }
-    });
-
-continueBtn.addEventListener('click', async () => {
-    const uploadedFile = sessionStorage.getItem('uploaded_file');
-    if (!selectedMethod) {
-        alert('Please select a method first.');
-        return;
-    }
-    if (!uploadedFile) {
-        alert('Please upload a file first.');
-        return;
-    }
-    continueBtn.disabled = true;
-    continueBtn.textContent = 'Processing...';
-    downloadSection.style.display = 'none';
-
-    const processingPanel = document.getElementById('processingPanel');
-    const procMethodLabel = document.getElementById('procMethodLabel');
-    const terminalOutput = document.getElementById('terminalOutput');
-    if (processingPanel) {
-        if (procMethodLabel) procMethodLabel.textContent = selectedMethod;
-        if (terminalOutput) terminalOutput.innerHTML = '';
-        processingPanel.style.display = 'block';
-    }
-
-    function appendLog(msg) {
-        if (!terminalOutput) return;
-        const line = document.createElement('div');
-        const lc = msg.toLowerCase();
-        if (lc.startsWith('[error]')) line.className = 'log-error';
-        else if (lc.startsWith('[warning]') || lc.startsWith('[warn]')) line.className = 'log-warn';
-        else if (lc.startsWith('[debug]')) line.className = 'log-debug';
-        else line.className = 'log-info';
-        line.textContent = msg;
-        terminalOutput.appendChild(line);
-        terminalOutput.scrollTop = terminalOutput.scrollHeight;
-    }
-
-    try {
-        let alphaValue = 0.05;
-        if (ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
-            const input = document.getElementById('alphaInput');
-            if (input) alphaValue = parseFloat(input.value) || 0.05;
-        }
-
-        let requestData = {
-            uploaded_file: uploadedFile,
-            method: selectedMethod,
-            alpha: alphaValue
-        };
-
-        if (selectedMethod.toLowerCase() === 'polya filter') {
-            requestData.alpha = parseFloat(document.getElementById('polyaAlpha')?.value) || 0.05;
-            const aVal = parseFloat(document.getElementById('polyaA')?.value);
-            requestData.a_parameter = isNaN(aVal) ? -1 : aVal;
-            requestData.correction_method = document.getElementById('polyaCorrection')?.value || 'fdr';
-            requestData.directed = document.getElementById('polyaDirected')?.value || 'false';
-        }
-
-        if (selectedMethod.toLowerCase() === 'global threshold filter') {
-            let params = null;
-            const stored = sessionStorage.getItem('threshold_params');
-            if (stored) {
-                params = JSON.parse(stored);
-            } else {
-
-                const colSel = document.getElementById('thresholdColumn');
-                const dirSel = document.getElementById('thresholdDirection');
-                const valIn  = document.getElementById('thresholdValue');
-                if (colSel && dirSel && valIn && valIn.value !== '') {
-                    const dirRaw = dirSel.value;
-                    params = {
-                        column: colSel.value === 'auto' ? 'auto' : parseInt(colSel.value),
-                        direction: dirRaw === 'greater' ? 'gte' : dirRaw === 'less' ? 'lte' : dirRaw,
-                        value: parseFloat(valIn.value)
-                    };
-                }
-            }
-            if (params && !isNaN(params.value)) {
-                const direction = params.direction === 'greater' ? 'gte' :
-                                  params.direction === 'less' ? 'lte' :
-                                  params.direction;
-                requestData = {
-                    ...requestData,
-                    col_index: params.column === 'auto' ? 2 : params.column,
-                    threshold: params.value,
-                    direction: direction,
-                    chunk_size: 50000
-                };
-            } else {
-                alert('Please enter a threshold value.');
-                continueBtn.disabled = false;
-                continueBtn.textContent = 'Run Method';
-                if (processingPanel) processingPanel.style.display = 'none';
-                return;
-            }
-        }
-
-        Object.assign(requestData, collectDynamicParams(selectedMethod));
-
-        const bounded01 = ['cosine similarity weighted projection', 'jaccard similarity weighted projection'];
-        if (bounded01.includes((selectedMethod || '').toLowerCase())) {
-            const t = requestData.threshold;
-            if (t == null || isNaN(t) || t < 0 || t > 1) {
-                clearFieldErrors();
-                showFieldError('dp_threshold', 'Threshold must be between 0 and 1.');
-                continueBtn.disabled = false;
-                continueBtn.textContent = 'Run Method';
-                if (processingPanel) processingPanel.style.display = 'none';
-                return;
-            }
-        }
-
-        window.currentMethod = selectedMethod;
-
-        const startResp = await fetch(`${API_BASE}/process`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestData),
-            credentials: 'include'
-        });
-        const startData = await startResp.json();
-
-        if (!startResp.ok) {
-            throw new Error(startData.message || 'Failed to start processing');
-        }
-
-        const taskId = startData.task_id;
-        appendLog(`[INFO] Task started: ${taskId}`);
-
-        let seenLogs = 0;
-        await new Promise((resolve, reject) => {
-            const timer = setInterval(async () => {
-                try {
-                    const pollResp = await fetch(`${API_BASE}/task_status/${taskId}`, {
-                        credentials: 'include'
-                    });
-                    const pollData = await pollResp.json();
-
-                    const logs = pollData.logs || [];
-                    for (let i = seenLogs; i < logs.length; i++) {
-                        appendLog(logs[i]);
-                    }
-                    seenLogs = logs.length;
-
-                    if (pollData.status === 'done') {
-                        clearInterval(timer);
-                        if (processingPanel) processingPanel.style.display = 'none';
-                        resolve(pollData.result);
-                    } else if (pollData.status === 'error') {
-                        clearInterval(timer);
-                        reject(new Error(pollData.error || 'Processing failed'));
-                    }
-
-                } catch (pollErr) {
-                    clearInterval(timer);
-                    reject(pollErr);
-                }
-            }, 800);
-        }).then((result) => {
-            const data = result;
-            const methodName = window.currentMethod || selectedMethod;
-            const files = data.files || {};
-            let resultFiles = [];
-
-            if (files.result_file) {
-                resultFiles.push({name: files.result_file, desc: `${methodName} Result`});
-                if (files.communities_file) {
-                    resultFiles.push({name: files.communities_file, desc: `${methodName} Communities`});
-                }
-            } else if (files.result) {
-                resultFiles.push({name: files.result, desc: `${methodName} Result`});
-            } else if (files.node1_file && files.node2_file) {
-                resultFiles.push({name: files.node1_file, desc: `${methodName} - Node1 Projection`});
-                resultFiles.push({name: files.node2_file, desc: `${methodName} - Node2 Projection`});
-            } else if (files.gene_file && files.disease_file) {
-                resultFiles.push({name: files.gene_file, desc: `${methodName} - Gene Projection`});
-                resultFiles.push({name: files.disease_file, desc: `${methodName} - Disease Projection`});
-            } else {
-                for (const key in files) {
-                    if (typeof files[key] === 'string' && files[key].length > 0) {
-                        resultFiles.push({name: files[key], desc: `${methodName} Result`});
-                        break;
-                    }
-                }
-            }
-
-            if (resultFiles.length === 0) {
-                throw new Error('No result files found in the response.');
-            }
-
-            currentResultFile = resultFiles;
-
-            sessionStorage.setItem('result_file', resultFiles[0].name);
-            if (resultFiles.length >= 2) {
-                sessionStorage.setItem('result_file_2', resultFiles[1].name);
-            }
-
-            downloadMessage.textContent = resultFiles.length === 1
-                ? `Processing completed. Result: ${resultFiles[0].name}`
-                : `Processing completed. ${resultFiles.length} result files generated.`;
-
-            downloadSection.style.display = 'block';
-            continueBtn.style.display = 'none';
-
-            if (window.updateComparisonButtons) {
-                window.updateComparisonButtons();
-            }
-        });
-
-    } catch (error) {
-        console.error('Error during processing:', error);
-        const processingPanel = document.getElementById('processingPanel');
-        const terminalOutput = document.getElementById('terminalOutput');
-        if (terminalOutput) {
-            const errLine = document.createElement('div');
-            errLine.className = 'log-error';
-            errLine.textContent = `[ERROR] ${error.message}`;
-            terminalOutput.appendChild(errLine);
-            terminalOutput.scrollTop = terminalOutput.scrollHeight;
-        } else {
-            alert(`Error: ${error.message}`);
-        }
-    } finally {
-        continueBtn.disabled = false;
-        continueBtn.textContent = 'Run Method';
-    }
-});
-
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', async () => {
-            if (!currentResultFile || currentResultFile.length === 0) {
-                alert('No result file to download.');
-                return;
-            }
-
-            downloadBtn.disabled = true;
-            downloadBtn.textContent = 'Downloading...';
-
-            try {
-
-                for (const fileInfo of currentResultFile) {
-                    await downloadFile(
-                        `${API_BASE}/download?file=${encodeURIComponent(fileInfo.name)}`,
-                        fileInfo.name
-                    );
-                }
-
-                const completeMsg = document.createElement('div');
-                completeMsg.style.cssText = `
-                    margin-top: 10px;
-                    padding: 10px;
-                    background-color: rgba(76, 175, 80, 0.8);
-                    color: white;
-                    border-radius: 5px;
-                    text-align: center;
-                    font-family: monospace;
-                `;
-                completeMsg.textContent = 'Download completed successfully! You can now select a new method and upload another file.';
-                methodPanel.appendChild(completeMsg);
-
-                setTimeout(() => {
-                    if (completeMsg.parentNode) {
-                        completeMsg.parentNode.removeChild(completeMsg);
-                    }
-                }, 5000);
-
-                sessionStorage.removeItem('uploaded_file');
-                fileInput.value = '';
-                previewBox.style.display = 'none';
-                previewBox.textContent = '';
-                downloadSection.style.display = 'none';
-                continueBtn.style.display = 'none';
-                currentResultFile = null;
-
-                const pBtn2 = document.getElementById('projectionsBtn');
-                const bBtn2 = document.getElementById('backboneBtn');
-                if (pBtn2) pBtn2.innerHTML = 'Bipartite Projections <span class="dropdown-arrow">▼</span>';
-                if (bBtn2) bBtn2.innerHTML = 'Backbone Extraction <span class="dropdown-arrow">▼</span>';
-                selectedMethod = null;
-                selectedCategory = null;
-
-            } catch (error) {
-                alert(`Download error: ${error.message}`);
-            } finally {
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Download Result';
-            }
-        });
-    }
-}
-
-let isGuideVisible = false;
-
-function showGuideContent() {
-    const mainPanel = document.getElementById('mainPanel');
-    const methodPanel = document.getElementById('methodPanel');
-    const paramField = document.getElementById('paramField');
-    const downloadSection = document.getElementById('downloadSection');
-    const globalThresholdPanel = document.getElementById('globalThresholdPanel');
-    const visualizationSection = document.getElementById('visualizationSection');
-    const continueBtn = document.getElementById('continueBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-
-    if (methodPanel) methodPanel.style.display = 'none';
-    if (paramField) paramField.style.display = 'none';
-    if (downloadSection) downloadSection.style.display = 'none';
-    if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
-    const polyaPanelGuide = document.getElementById('polyaPanel');
-    if (polyaPanelGuide) polyaPanelGuide.style.display = 'none';
-    const dpGuide = document.getElementById('dynamicParamsPanel');
-    if (dpGuide) dpGuide.style.display = 'none';
-    if (visualizationSection) visualizationSection.style.display = 'none';
-
-    if (continueBtn) continueBtn.style.display = 'none';
-    if (uploadBtn) uploadBtn.style.display = 'none';
-    const methodDropdownGroup = document.getElementById('methodDropdownGroup');
-    if (methodDropdownGroup) methodDropdownGroup.style.display = 'none';
-
-    const previewBox = document.getElementById('filePreviewBox');
-    if (previewBox) previewBox.style.display = 'none';
-
-    const projOpts = document.getElementById('projectionsOptions');
-    if (projOpts) projOpts.style.display = 'none';
-    const bkbOpts = document.getElementById('backboneOptions');
-    if (bkbOpts) bkbOpts.style.display = 'none';
-
-    const existingGuide = document.getElementById('guideContent');
-    if (existingGuide) existingGuide.remove();
-
-    const helpContent = document.createElement('div');
-    helpContent.id = 'guideContent';
-    helpContent.className = 'help-main-content';
-    helpContent.innerHTML = `
-        <div class="help-main-container">
-            <div class="how-to-use-header" style="text-align:center; margin-bottom:2rem;">
-                <h1>Guide</h1>
-                <p>How to use PRED-BiPN &amp; Scientific Background</p>
-            </div>
-            <div class="how-to-use-steps">
-                <div class="how-to-use-step"><div class="step-number">1</div><div class="step-content"><h3>Choose a method</h3><p>Click <strong>Bipartite Projections</strong> or <strong>Backbone Extraction</strong> to expand the method list and select one of the 23 available algorithms.</p><div class="step-tip"><strong>Tip:</strong> Projection methods turn a bipartite network into a monopartite one; backbone methods prune a weighted network. The relevant parameter fields appear automatically once a method is selected.</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">2</div><div class="step-content"><h3>Upload your network file</h3><p>Click <strong>Upload file</strong> and select your .csv, .tsv, or .txt file. A preview of the first 10 rows appears automatically.</p><div class="step-tip"><strong>Supported:</strong> 2-column bipartite (node type A → node type B, e.g. gene → disease, author → paper, user → product) or 3-column weighted (Source → Target → Weight).</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">3</div><div class="step-content"><h3>Configure parameters and execute</h3><p>Set the parameters shown for your method, then click <strong>Run Method</strong>.</p><div class="step-tip"><strong>Correlation & odds-ratio methods:</strong> choose a significance level α (default 0.05) and a multiple-testing correction &mdash; Benjamini-Hochberg FDR (default), Bonferroni, or None. <strong>Similarity & salience methods</strong> use a threshold between 0 and 1. Stricter settings keep fewer edges.</div></div></div>
-                <div class="how-to-use-step"><div class="step-number">4</div><div class="step-content"><h3>Compare and download results</h3><p>Once done, <strong>Download Result</strong> (TSV) or <strong>Export as PNG</strong>. For backbone-extraction methods you can also <strong>Compare Networks</strong> to view the original vs filtered network side by side.</p></div></div>
-                <div class="how-to-use-step"><div class="step-number">5</div><div class="step-content"><h3>Reset or start new analysis</h3><p>Use the <strong>Tool</strong> button in the top bar to reset and start fresh.</p></div></div>
-            </div>
-            <hr style="margin: 2rem 0; border-color: rgba(255,255,255,0.2);">
-
-            <!-- Input format -->
-            <div class="help-main-section">
-                <h3>⨀ Input Format</h3>
-                <p>
-                    The header row is detected automatically; set <strong>First row is a header</strong> to Yes or No
-                    if your first row is misread. Node names are trimmed of surrounding spaces, and names that differ only
-                    by a trailing underscore (e.g. <code>X_OF_BREAST</code> and <code>X_OF_BREAST_</code>) are reported in
-                    the log, since they are counted as different nodes.
-                </p>
-                <p>
-                    Projections are treated as undirected (A&ndash;B is the same edge as B&ndash;A). Noise Corrected,
-                    Doubly Stochastic and Pólya filters offer a <strong>Directed</strong> option for directed networks.
-                    Hierarchical Backbone needs the original two-column bipartite file, not a projection.
-                    The Marginal Likelihood and Pólya filters model integer counts; non-integer weights are
-                    truncated or rounded, and a warning appears in the log.
-                </p>
-            </div>
-
-            <!-- Edge Betweenness -->
-            <div class="help-main-section">
-                <h3>⨀ Edge Betweenness</h3>
-                <p>
-                    The edge betweenness of an edge is the number of shortest paths between node pairs that pass
-                    through it (Girvan &amp; Newman, 2002), computed once for all edges with Brandes' algorithm
-                    (Brandes, 2001). Weights are similarities, so each weight <em>w</em> becomes a length 1/<em>w</em>.
-                    An edge is kept if its betweenness &ge; <em>factor</em> &times; mean betweenness.
-                </p>
-                <p>
-                    <strong>factor</strong> (default 1): larger values give sparser backbones.
-                    <strong>Use edge weights</strong>: No sets every length to 1.
-                    <strong>Sampled source nodes</strong>: 0 computes exact betweenness; a positive number estimates it
-                    from that many random source nodes, for very large networks.
-                    Output: <code>source  target  weight  edge_betweenness</code>, sorted by betweenness.
-                </p>
-                <p class="citation">
-                    Brandes, U. (2001). A faster algorithm for betweenness centrality. <em>Journal of Mathematical
-                    Sociology</em>, 25(2), 163&ndash;177.
-                    <a href="https://doi.org/10.1080/0022250X.2001.9990249" target="_blank" rel="noopener">https://doi.org/10.1080/0022250X.2001.9990249</a><br>
-                    Girvan, M., &amp; Newman, M. E. J. (2002). Community structure in social and biological networks.
-                    <em>PNAS</em>, 99(12), 7821&ndash;7826.
-                    <a href="https://doi.org/10.1073/pnas.122653799" target="_blank" rel="noopener">https://doi.org/10.1073/pnas.122653799</a>
-                </p>
-            </div>
-
-            <!-- Data Sources -->
-            <div class="help-main-section">
-                <h3>⨀ Data Sources</h3>
-                <p>
-                    The gene-disease association data used to validate the methods
-                    comes from:
-                </p>
-                <p class="citation">
-                    Kontou, P. I., Pavlopoulou, A., Dimou, N. L., Pavlopoulos, G. A., &amp; Bagos, P. G.
-                    (2016). <em>Network analysis of genes and their association with diseases</em>.
-                    Gene, 590(1), 68&ndash;78.
-                    <a href="https://doi.org/10.1016/j.gene.2016.05.044" target="_blank" rel="noopener">https://doi.org/10.1016/j.gene.2016.05.044</a>
-                </p>
-                <p>
-                    The tool is not limited to this dataset &mdash; any bipartite or weighted edge list works.
-                </p>
-            </div>
-
-            <!-- Technical Specifications -->
-            <div class="help-main-section">
-                <h3>⨯ Technical Specifications</h3>
-                <div class="tech-specs">
-                    <div class="spec-item">
-                        <strong>Languages:</strong> Python, JavaScript, HTML/CSS
-                    </div>
-                    <div class="spec-item">
-                        <strong>Libraries:</strong> NetworkX, igraph, Pandas, SciPy, NumPy, Scikit-learn
-                    </div>
-                    <div class="spec-item">
-                        <strong>Parallel Processing:</strong> Multiprocessing support for large-scale networks
-                    </div>
-                    <div class="spec-item">
-                        <strong>Export Formats:</strong> TSV
-                    </div>
-                </div>
-            </div>
-
-            <button id="backToToolFromGuideBtn" class="back-to-tool-btn">← Back to Tool</button>
-        </div>
-    `;
-
-    mainPanel.insertBefore(helpContent, methodPanel);
-
-    isGuideVisible = true;
-
-    const backBtn = document.getElementById('backToToolFromGuideBtn');
-    if (backBtn) {
-        backBtn.addEventListener('click', hideGuideContent);
-    }
-}
-
-function hideGuideContent() {
-    const mainPanel = document.getElementById('mainPanel');
-    const methodPanel = document.getElementById('methodPanel');
-    const paramField = document.getElementById('paramField');
-    const downloadSection = document.getElementById('downloadSection');
-    const helpContent = document.getElementById('guideContent');
-    const continueBtn = document.getElementById('continueBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const previewBox = document.getElementById('filePreviewBox');
-
-    if (helpContent) {
-        helpContent.remove();
-    }
-
-    if (methodPanel) methodPanel.style.display = 'flex';
-    if (continueBtn) continueBtn.style.display = 'inline-block';
-    if (uploadBtn) uploadBtn.style.display = 'inline-block';
-    const methodDropdownGroup = document.getElementById('methodDropdownGroup');
-    if (methodDropdownGroup) methodDropdownGroup.style.display = 'flex';
-
-    if (selectedMethod && ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
-        if (paramField) paramField.style.display = 'block';
-    } else {
-        if (paramField) paramField.style.display = 'none';
-    }
-    const polyaPanelHide = document.getElementById('polyaPanel');
-    if (polyaPanelHide) {
-        polyaPanelHide.style.display = selectedMethod && selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
-    }
-
-    const dpHide = document.getElementById('dynamicParamsPanel');
-    if (dpHide) dpHide.style.display = selectedMethod ? 'block' : 'none';
-
-    if (downloadSection) downloadSection.style.display = 'none';
-    if (previewBox) previewBox.style.display = 'none';
-
-    isGuideVisible = false;
-}
-
-function setupGuideButton() {
-    const helpBtn = document.getElementById('helpBtn');
-
-    if (helpBtn) {
-        helpBtn.addEventListener('click', function() {
-            if (isGuideVisible) {
-                hideGuideContent();
-            } else {
-                showGuideContent();
-            }
-        });
-    }
-
-    const infoBtn = document.getElementById('infoBtn');
-    if (infoBtn) {
-        infoBtn.addEventListener('click', function() {
-            if (isInfoVisible) {
-                hideInfoContent();
-            } else {
-                if (isGuideVisible) hideGuideContent();
-                showInfoContent();
-            }
-        });
-    }
-}
-
-let isInfoVisible = false;
-
-function showInfoContent() {
-    const mainPanel = document.getElementById('mainPanel');
-    const methodPanel = document.getElementById('methodPanel');
-    const paramField = document.getElementById('paramField');
-    const downloadSection = document.getElementById('downloadSection');
-    const globalThresholdPanel = document.getElementById('globalThresholdPanel');
-    const visualizationSection = document.getElementById('visualizationSection');
-    const continueBtn = document.getElementById('continueBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const methodDropdownGroup = document.getElementById('methodDropdownGroup');
-    const previewBox = document.getElementById('filePreviewBox');
-
-    if (methodPanel) methodPanel.style.display = 'none';
-    if (paramField) paramField.style.display = 'none';
-    if (downloadSection) downloadSection.style.display = 'none';
-    if (globalThresholdPanel) globalThresholdPanel.style.display = 'none';
-    const polyaPanelInfo = document.getElementById('polyaPanel');
-    if (polyaPanelInfo) polyaPanelInfo.style.display = 'none';
-    const dpInfo = document.getElementById('dynamicParamsPanel');
-    if (dpInfo) dpInfo.style.display = 'none';
-    if (visualizationSection) visualizationSection.style.display = 'none';
-    if (continueBtn) continueBtn.style.display = 'none';
-    if (uploadBtn) uploadBtn.style.display = 'none';
-    if (methodDropdownGroup) methodDropdownGroup.style.display = 'none';
-    if (previewBox) previewBox.style.display = 'none';
-
-    const existing = document.getElementById('infoContent');
-    if (existing) existing.remove();
-
-    const infoDiv = document.createElement('div');
-    infoDiv.id = 'infoContent';
-    infoDiv.className = 'help-main-content';
-    infoDiv.innerHTML = `
-        <div class="help-main-container">
-            <div class="how-to-use-header" style="text-align:center; margin-bottom:2rem;">
-                <h1>Credits</h1>
-                <p>The people behind PRED-BiPN</p>
-            </div>
-
-            <div class="help-main-section">
-                <h3>Development</h3>
-                <ul class="bibliography-list">
-                    <li><strong>Efstathios Voulgaris</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</li>
-                    <li><strong>Ioannis Charatsiaris</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece</li>
-                </ul>
-            </div>
-
-            <div class="help-main-section">
-                <h3>Academic Supervision</h3>
-                <ul class="bibliography-list">
-                    <li><strong>Pantelis Bagos, Professor</strong> &mdash; Department of Computer Science and Biomedical Informatics, University of Thessaly, Lamia, 35131, Greece &mdash; <a href="mailto:pbagos@compgen.org">pbagos@compgen.org</a></li>
-                    <li><strong>Panagiota I. Kontou, Assistant Professor</strong> &mdash; Department of Mathematics, University of Thessaly, 35131 Lamia, Greece &mdash; <a href="mailto:pkontou@uth.gr">pkontou@uth.gr</a></li>
-                </ul>
-            </div>
-
-            <button id="backToToolFromInfoBtn" class="back-to-tool-btn">← Back to Tool</button>
-        </div>
-    `;
-
-    mainPanel.insertBefore(infoDiv, methodPanel);
-    isInfoVisible = true;
-
-    const backBtn = document.getElementById('backToToolFromInfoBtn');
-    if (backBtn) {
-        backBtn.addEventListener('click', hideInfoContent);
-    }
-}
-
-function hideInfoContent() {
-    const mainPanel = document.getElementById('mainPanel');
-    const methodPanel = document.getElementById('methodPanel');
-    const paramField = document.getElementById('paramField');
-    const downloadSection = document.getElementById('downloadSection');
-    const continueBtn = document.getElementById('continueBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const methodDropdownGroup = document.getElementById('methodDropdownGroup');
-    const infoDiv = document.getElementById('infoContent');
-
-    if (infoDiv) infoDiv.remove();
-
-    if (methodPanel) methodPanel.style.display = 'flex';
-    if (continueBtn) continueBtn.style.display = 'inline-block';
-    if (uploadBtn) uploadBtn.style.display = 'inline-block';
-    if (methodDropdownGroup) methodDropdownGroup.style.display = 'flex';
-
-    if (selectedMethod && ALPHA_METHODS.includes(selectedMethod.toLowerCase())) {
-        if (paramField) paramField.style.display = 'block';
-    } else {
-        if (paramField) paramField.style.display = 'none';
-    }
-    const polyaPanelInfoHide = document.getElementById('polyaPanel');
-    if (polyaPanelInfoHide) {
-        polyaPanelInfoHide.style.display = selectedMethod && selectedMethod.toLowerCase() === 'polya filter' ? 'block' : 'none';
-    }
-
-    const dpInfoHide = document.getElementById('dynamicParamsPanel');
-    if (dpInfoHide) dpInfoHide.style.display = selectedMethod ? 'block' : 'none';
-
-    if (downloadSection) downloadSection.style.display = 'none';
-
-    isInfoVisible = false;
-}
-
-function createVisualizationSection() {
-    const mainPanel = document.getElementById('mainPanel');
-    if (!mainPanel) return;
-
-    if (document.getElementById('visualizationSection')) return;
-
-    const visSection = document.createElement('div');
-    visSection.id = 'visualizationSection';
-    visSection.className = 'visualization-section';
-    visSection.style.display = 'none';
-    visSection.innerHTML = `
-        <div class="vis-header">
-            <div class="vis-title">
-                <span class="vis-icon">⌗</span>
-                <h3>Network Topology Comparison</h3>
-            </div>
-            <button id="closeVisSection" class="vis-close">×</button>
-        </div>
-        <div class="vis-body">
-            <div id="visLoading" class="vis-loading">
-                <div class="vis-spinner"></div>
-                <p>Generating network visualization...</p>
-            </div>
-            <div id="visContent" style="display: none;">
-                <div class="comparison-wrapper">
-                    <div class="network-panel">
-                        <div class="panel-header before">
-                            <div class="panel-title">
-                                <span class="panel-icon">⊡</span>
-                                <span>Original Network</span>
-                            </div>
-                            <div class="panel-stats" id="statsBefore">-</div>
-                        </div>
-                        <div id="networkBefore" class="network-display"></div>
-                        <div class="panel-metrics" id="metricsBefore">
-                            <div class="metric-item">
-                                <span class="metric-symbol">ω</span>
-                                <span class="metric-value">-</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="vs-divider">
-                        <span>↯</span>
-                    </div>
-                    <div class="network-panel">
-                        <div class="panel-header after">
-                            <div class="panel-title">
-                                <span class="panel-icon">⌗</span>
-                                <span>Filtered Network</span>
-                            </div>
-                            <div class="panel-stats" id="statsAfter">-</div>
-                        </div>
-                        <div id="networkAfter" class="network-display"></div>
-                        <div class="panel-metrics" id="metricsAfter">
-                            <div class="metric-item">
-                                <span class="metric-symbol">ω</span>
-                                <span class="metric-value">-</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="comparison-footer">
-                    <div id="reductionInfo" class="reduction-badge"></div>
-                    <button id="exportVisBtn" class="vis-export-btn">
-                        <span>⤥</span> Export
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    mainPanel.appendChild(visSection);
-
-    document.getElementById('closeVisSection')?.addEventListener('click', () => {
-        visSection.style.display = 'none';
-        const hideBtn = document.getElementById('hideComparisonBtn');
-        if (hideBtn) hideBtn.style.display = 'none';
-    });
-
-    document.getElementById('exportVisBtn')?.addEventListener('click', () => {
-        const img = document.querySelector('#networkBefore img');
-        if (img && img.src) {
-            const link = document.createElement('a');
-            link.download = `network_comparison_${new Date().toISOString().slice(0,19)}.png`;
-            link.href = img.src;
-            link.click();
-        }
-    });
-}
-
-async function showInlineComparison(beforeFile, afterFile, method) {
-    console.log('showInlineComparison called with:', { beforeFile, afterFile, method });
-
-    if (!beforeFile || !afterFile) {
-        console.error('Missing files:', { beforeFile, afterFile });
-        alert('Missing files for comparison. Please ensure both original and result files are available.');
-        return;
-    }
-
-    if (!document.getElementById('visualizationSection')) {
-        createVisualizationSection();
-    }
-
-    const visSection = document.getElementById('visualizationSection');
-    const visLoading = document.getElementById('visLoading');
-    const visContent = document.getElementById('visContent');
-    const statsBefore = document.getElementById('statsBefore');
-    const statsAfter = document.getElementById('statsAfter');
-    const reductionInfo = document.getElementById('reductionInfo');
-    const networkBefore = document.getElementById('networkBefore');
-    const networkAfter = document.getElementById('networkAfter');
-    const metricsBefore = document.getElementById('metricsBefore');
-    const metricsAfter = document.getElementById('metricsAfter');
-    const hideBtn = document.getElementById('hideComparisonBtn');
-
-    visSection.style.display = 'block';
-    visLoading.style.display = 'flex';
-    visContent.style.display = 'none';
-
-    if (hideBtn) hideBtn.style.display = 'inline-block';
-
-    visSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-    try {
-        const response = await fetch(`${API_BASE}/visualize/compare`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                before_file: beforeFile,
-                after_file: afterFile,
-                method: method
-            }),
-            credentials: 'include'
-        });
-
-        const data = await response.json();
-        console.log('Comparison response:', data);
-
-        if (data.success) {
-
-            statsBefore.innerHTML = `${data.stats_before.nodes} nodes | ${data.stats_before.edges} edges`;
-            statsAfter.innerHTML = `${data.stats_after.nodes} nodes | ${data.stats_after.edges} edges`;
-
-            if (metricsBefore) {
-                metricsBefore.innerHTML = `
-                    <div class="metric-item">
-                        <span class="metric-symbol">ω</span>
-                        <span class="metric-label">Density</span>
-                        <span class="metric-value">${data.stats_before.density.toFixed(4)}</span>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-symbol">δ</span>
-                        <span class="metric-label">Edges / node</span>
-                        <span class="metric-value">${(data.stats_before.edges / data.stats_before.nodes).toFixed(2)}</span>
-                    </div>
-                `;
-            }
-
-            if (metricsAfter) {
-                metricsAfter.innerHTML = `
-                    <div class="metric-item">
-                        <span class="metric-symbol">ω</span>
-                        <span class="metric-label">Density</span>
-                        <span class="metric-value">${data.stats_after.density.toFixed(4)}</span>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-symbol">δ</span>
-                        <span class="metric-label">Edges / node</span>
-                        <span class="metric-value">${(data.stats_after.edges / data.stats_after.nodes).toFixed(2)}</span>
-                    </div>
-                `;
-            }
-
-            const reduction = data.reduction.toFixed(1);
-            const edgesRemoved = data.stats_before.edges - data.stats_after.edges;
-            reductionInfo.innerHTML = `⤥ ${reduction}% · ${edgesRemoved} edges removed`;
-
-            networkBefore.innerHTML = '';
-            networkAfter.innerHTML = '';
-
-            const imgBefore = document.createElement('img');
-            imgBefore.src = `data:image/png;base64,${data.image_before}`;
-            imgBefore.alt = 'Original Network';
-            imgBefore.style.maxWidth = '100%';
-            imgBefore.style.height = 'auto';
-            imgBefore.style.borderRadius = '8px';
-            imgBefore.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-            networkBefore.appendChild(imgBefore);
-
-            const imgAfter = document.createElement('img');
-            imgAfter.src = `data:image/png;base64,${data.image_after}`;
-            imgAfter.alt = 'Filtered Network';
-            imgAfter.style.maxWidth = '100%';
-            imgAfter.style.height = 'auto';
-            imgAfter.style.borderRadius = '8px';
-            imgAfter.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-            networkAfter.appendChild(imgAfter);
-
-            visLoading.style.display = 'none';
-            visContent.style.display = 'block';
-        } else {
-            throw new Error(data.message || 'Visualization failed');
-        }
-    } catch (error) {
-        console.error('Comparison error:', error);
-        visLoading.innerHTML = `
-            <div style="color: #c0392b; text-align: center; padding: 2rem;">
-                <strong>Error:</strong> ${error.message}<br><br>
-                Make sure the backend server is running on ${API_BASE}
-            </div>
-        `;
-    }
-}
-
-function setupComparisonButtons() {
-    const compareBtn = document.getElementById('compareNetworksInlineBtn');
-    const hideBtn = document.getElementById('hideComparisonBtn');
-
-    if (!compareBtn) return { updateButtonsState: () => {} };
-
-    function updateButtonsState() {
-        const uploadedFile = sessionStorage.getItem('uploaded_file');
-        let resultFile = null;
-
-        if (currentResultFile && currentResultFile.length > 0) {
-            resultFile = currentResultFile[0].name;
-        } else if (sessionStorage.getItem('result_file')) {
-            resultFile = sessionStorage.getItem('result_file');
-        }
-
-        console.log('Update buttons - Uploaded:', uploadedFile);
-        console.log('Update buttons - Result:', resultFile);
-
-        if (selectedCategory !== 'backbone') {
-            compareBtn.style.display = 'none';
-            if (hideBtn) hideBtn.style.display = 'none';
-            const vis = document.getElementById('visualizationSection');
-            if (vis) vis.style.display = 'none';
-            return;
-        }
-        compareBtn.style.display = 'inline-block';
-
-        if (uploadedFile && resultFile) {
-            compareBtn.disabled = false;
-            compareBtn.style.opacity = '1';
-            compareBtn.style.cursor = 'pointer';
-            compareBtn.style.pointerEvents = 'auto';
-        } else {
-            compareBtn.disabled = true;
-            compareBtn.style.opacity = '0.5';
-            compareBtn.style.cursor = 'not-allowed';
-            compareBtn.style.pointerEvents = 'none';
-        }
-    }
-
-    compareBtn.addEventListener('click', () => {
-        if (compareBtn.disabled) {
-            alert('Please wait for processing to complete.');
-            return;
-        }
-
-        const currentUploaded = sessionStorage.getItem('uploaded_file');
-        let currentResult = null;
-
-        if (currentResultFile && currentResultFile.length > 0) {
-            currentResult = currentResultFile[0].name;
-        } else if (sessionStorage.getItem('result_file')) {
-            currentResult = sessionStorage.getItem('result_file');
-        }
-
-        if (currentUploaded && currentResult) {
-            showInlineComparison(currentUploaded, currentResult, selectedMethod);
-            if (hideBtn) hideBtn.style.display = 'inline-block';
-        } else {
-            alert('Both original and result files are required for comparison.');
-        }
-    });
-
-    if (hideBtn) {
-        hideBtn.addEventListener('click', () => {
-            const visSection = document.getElementById('visualizationSection');
-            if (visSection) {
-                visSection.style.display = 'none';
-                hideBtn.style.display = 'none';
-            }
-        });
-
-        hideBtn.style.display = 'none';
-    }
-
-    updateButtonsState();
-
-    return { updateButtonsState };
-}
-
-let globalThresholdParams = {
-    column: null,
-    direction: 'greater',
-    value: 0.5,
-    columnNames: []
+const ALPHA = { key: 'alpha', label: 'Significance level α', hint: 'Smaller keeps fewer edges', value: 0.05, min: 0.0001, max: 1, step: 0.005 };
+const CORRECTION = { key: 'correction', label: 'Multiple-testing correction', type: 'select', value: 'fdr_bh',
+  options: [['fdr_bh', 'Benjamini–Hochberg FDR'], ['bonferroni', 'Bonferroni'], ['none', 'None']] };
+const DIRECTED = { key: 'directed', label: 'Network type', type: 'select', value: 'false',
+  options: [['false', 'Undirected'], ['true', 'Directed']] };
+const HEADER = { key: 'has_header', label: 'First row is a header', type: 'select', value: 'auto',
+  options: [['auto', 'Auto'], ['true', 'Yes'], ['false', 'No']] };
+
+const PARAMS = {
+  'Disparity Filter': [ALPHA],
+  'Doubly Stochastic Filter': [
+    { key: 'ds_mode', label: 'Stopping rule', hint: 'Slater: add edges until connected', type: 'select', value: 'slater',
+      options: [['slater', 'Slater (2009)'], ['strict', 'Strict (PRED-BiPN heuristic)']] },
+    DIRECTED,
+    { ...ALPHA, hint: 'Strict rule only', when: v => v.ds_mode === 'strict' }],
+  'Locally Adaptive Network Sparsification Filter': [ALPHA],
+  'Marginal Likelihood Filter': [ALPHA],
+  'Noise Corrected Filter': [
+    { key: 'delta', label: 'Threshold δ', hint: 'Keep score − δ·sd > 0', value: 3.09, min: 0, step: 0.01 },
+    DIRECTED],
+  'Modularity Filter': [
+    { key: 'percentage', label: 'Share of nodes kept', hint: 'Largest |vitality|, 0 to 1', value: 0.3, min: 0.01, max: 1, step: 0.05 },
+    { key: 'seed', label: 'Louvain seed', value: 42, min: 0, step: 1 },
+    { key: 'keep_lcc', label: 'Keep only largest component', type: 'select', value: 'false', options: [['false', 'No'], ['true', 'Yes']] }],
+  'Polya Filter': [ALPHA,
+    { key: 'a_parameter', label: 'Parameter a', hint: '−1 = estimate from data, 1 = disparity filter', value: -1, min: -1, max: 15, step: 0.1 },
+    { key: 'correction_method', label: 'Multiple-testing correction', type: 'select', value: 'fdr', options: [['fdr', 'Benjamini–Hochberg FDR'], ['bonferroni', 'Bonferroni']] },
+    DIRECTED],
+  'High Salience Skeleton': [{ key: 'threshold', label: 'Salience threshold', hint: '0 to 1', value: 0.9, min: 0, max: 1, step: 0.01 }],
+  'Edge Betweenness': [
+    { key: 'factor', label: 'Factor', hint: 'Keep betweenness ≥ factor × mean', value: 1, min: 0, step: 0.1 },
+    { key: 'weighted', label: 'Use edge weights', hint: 'Length = 1 / weight', type: 'select', value: 'true', options: [['true', 'Yes'], ['false', 'No']] },
+    { key: 'sample_size', label: 'Sampled source nodes', hint: '0 = exact', value: 0, min: 0, step: 1 }],
+  'Hierarchical Backbone': [
+    { key: 'z_threshold', label: 'Z-score threshold', value: 1.64, step: 0.01 },
+    { key: 'alpha_percentile', label: 'Alpha percentile', hint: '1 to 100', value: 95, min: 1, max: 100, step: 1 }],
+  'Global Threshold Filter': [
+    { key: 'col_index', label: 'Column', type: 'select', value: '2', options: [] },
+    { key: 'direction', label: 'Keep values', type: 'select', value: 'gte', options: [['gte', '≥ threshold'], ['lte', '≤ threshold']] },
+    { key: 'threshold', label: 'Threshold', value: 0, step: 'any' }],
+  'Cosine Similarity Weighted Projection': [{ key: 'threshold', label: 'Similarity threshold', hint: '0 to 1', value: 0.5, min: 0, max: 1, step: 0.01 }],
+  'Adamic Adar Similarity Weighted Projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
+  'Resource Allocation Similarity Weighted Projection': [{ key: 'threshold', label: 'Similarity threshold', value: 0.5, min: 0, step: 0.01 }],
+  'Jaccard Similarity Weighted Projection': [{ key: 'threshold', label: 'Jaccard threshold', hint: '0 to 1', value: 0, min: 0, max: 1, step: 0.01 }],
+  'Kendall Correlation Weighted Projection': [CORRECTION, ALPHA],
+  'Spearman Correlation Weighted Projection': [CORRECTION, ALPHA],
+  'Pearson Correlation Weighted Projection': [CORRECTION, ALPHA],
+  'Odds Ratio Weighted Projection': [CORRECTION, ALPHA, { key: 'or_threshold', label: 'Odds ratio threshold', value: 1, min: 0, step: 0.1 }],
 };
 
-async function detectColumnsForThreshold(file) {
-    const formData = new FormData();
-    formData.append('file', file);
+const S = {
+  cat: 'proj', method: null, picking: true, query: '',
+  file: null,        // analysed input (see analyse)
+  fileObj: null,     // File chosen by the user, uploaded on Run
+  uploaded: null,    // server-side name of the input
+  params: {},
+  view: 'empty',     // empty | running | error | done
+  run: null,
+};
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = n => n.toLocaleString('en-US');
+const methodRow = name => [...METHODS.proj, ...METHODS.bb].find(m => m[0] === name);
+const catOf = name => METHODS.proj.some(m => m[0] === name) ? 'proj' : 'bb';
 
-    try {
-        const response = await fetch(`${API_BASE}/detect_columns`, {
-            method: 'POST',
-            body: formData,
-            credentials: 'include'
-        });
+/* ---------- reading an edge list in the browser ---------- */
+const HEADER_WORDS = new Set(['source', 'target', 'from', 'to', 'node', 'node1', 'node2', 'gene', 'genes', 'gene1', 'gene2',
+  'disease', 'diseases', 'src', 'dst', 'id', 'name', 'weight', 'score', 'value', 'col1', 'col2', 'edge', 'index']);
+const isNum = x => x !== '' && x != null && !isNaN(Number(x));
 
-        const data = await response.json();
-        if (data.success) {
-            return data.columns;
-        }
-        return [];
-    } catch (error) {
-        console.error('Column detection error:', error);
-        return [];
-    }
+// Same rules as backend/input_format.py, so "Detected" here matches what the run will do.
+function analyse(text, name) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const first = lines[0] || '';
+  const sep = ['\t', ',', ';'].find(s => first.includes(s)) || null;
+  const split = l => (sep ? l.split(sep) : l.trim().split(/\s+/)).map(c => c.trim());
+  const p1 = split(first), p2 = lines[1] ? split(lines[1]) : [];
+  const header = p1.length >= 2 && ((HEADER_WORDS.has(p1[0].toLowerCase()) && HEADER_WORDS.has(p1[1].toLowerCase()))
+    || (p1.length > 2 && p2.length > 2 && !isNum(p1[2]) && isNum(p2[2])));
+  const rows = lines.slice(header ? 1 : 0).map(split);
+  const cols = Math.max(...rows.slice(0, 50).map(r => r.filter(c => c !== '').length), p1.length >= 2 ? 2 : p1.length);
+  const A = new Set(), B = new Set();
+  rows.forEach(r => { if (r[0]) A.add(r[0]); if (r[1]) B.add(r[1]); });
+  let shared = 0; A.forEach(a => B.has(a) && shared++);
+  const kind = cols < 2 ? 'invalid' : shared > 0.5 * Math.min(A.size, B.size) ? 'projection' : 'bipartite';
+  const nearDup = [A, B].reduce((n, set) => {
+    const seen = new Set(); let d = 0;
+    set.forEach(x => { const k = x.replace(/[_\s]+$/, ''); seen.has(k) ? d++ : seen.add(k); });
+    return n + d;
+  }, 0);
+  const info = { name, header, sep, cols, rows: rows.length, kind, A: A.size, B: B.size, nearDup,
+    weighted: rows.slice(0, 50).every(r => isNum(r[2])), headerNames: header ? p1 : null,
+    numericCols: p1.map((c, i) => i).filter(i => i >= 2 && rows.slice(0, 20).every(r => isNum(r[i]))),
+    preview: rows.slice(0, 5), example: [rows[0]?.[0], rows[0]?.[1]] };
+  if (kind === 'projection') Object.assign(info, oneMode(rows));
+  return info;
+}
+function oneMode(rows) {
+  const id = new Map(), parent = [];
+  const get = x => { if (!id.has(x)) { id.set(x, parent.length); parent.push(parent.length); } return id.get(x); };
+  const find = x => { while (parent[x] !== x) x = parent[x] = parent[parent[x]]; return x; };
+  const seen = new Set();
+  rows.forEach(r => {
+    if (!r[0] || !r[1] || r[0] === r[1]) return;
+    const a = get(r[0]), b = get(r[1]);
+    seen.add(a < b ? a + ',' + b : b + ',' + a);
+    const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb;
+  });
+  let comps = 0; parent.forEach((p, i) => find(i) === i && comps++);
+  return { nodes: parent.length, edges: seen.size, comps };
 }
 
-function updateThresholdPanel(columns) {
-    const columnSelect = document.getElementById('thresholdColumn');
-    const columnPreview = document.getElementById('columnPreview');
-    const detectedColumnsSpan = document.getElementById('detectedColumns');
+/* ---------- operation strip (schematic; the numbers are real) ---------- */
+function rng(seed) { return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
+function denseNet(cut) {
+  const r = rng(7), n = 16, p = [];
+  for (let i = 0; i < n; i++) { const a = i / n * 6.283 + r() * .3, d = 30 + r() * 30; p.push([80 + Math.cos(a) * d, 60 + Math.sin(a) * d * .8]); }
+  const e = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (r() < .32) e.push([i, j, r() < .2]);
+  const kept = new Set(); e.forEach(([i, j, k]) => k && (kept.add(i), kept.add(j)));
+  return `<svg viewBox="0 0 160 120" aria-hidden="true">${e.map(([i, j, k]) => `<line class="e${cut && !k ? ' cut' : ''}" x1="${p[i][0]}" y1="${p[i][1]}" x2="${p[j][0]}" y2="${p[j][1]}"/>`).join('')}${p.map((q, i) => `<circle class="${cut && !kept.has(i) ? 'nx' : 'nn'}" cx="${q[0]}" cy="${q[1]}" r="3.4"/>`).join('')}</svg>`;
+}
+function bipNet() {
+  const r = rng(11), A = [...Array(6)].map((_, i) => [40, 14 + i * 18.4]), B = [...Array(5)].map((_, i) => [120, 22 + i * 19]);
+  const e = []; A.forEach(a => B.forEach(b => r() < .42 && e.push([a, b])));
+  return `<svg viewBox="0 0 160 120" aria-hidden="true">${e.map(([a, b]) => `<line class="e" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`).join('')}${A.map(q => `<circle class="na" cx="${q[0]}" cy="${q[1]}" r="4"/>`).join('')}${B.map(q => `<circle class="nb" cx="${q[0]}" cy="${q[1]}" r="4"/>`).join('')}</svg>`;
+}
+function ringNet(cls, n, seed) {
+  const r = rng(seed), p = [...Array(n)].map((_, i) => { const a = i / n * 6.283; return [80 + Math.cos(a) * 42, 60 + Math.sin(a) * 38]; });
+  const e = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (r() < .45) e.push([p[i], p[j]]);
+  return `<svg viewBox="0 0 160 120" aria-hidden="true">${e.map(([a, b]) => `<line class="e" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`).join('')}${p.map(q => `<circle class="${cls}" cx="${q[0]}" cy="${q[1]}" r="4"/>`).join('')}</svg>`;
+}
+const ARROW = l => `<div class="arrow"><svg width="40" height="12" viewBox="0 0 40 12" aria-hidden="true"><path d="M0 6h36m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>${l}</div>`;
+const panel = (svg, lbl, fig) => `<div class="panel">${svg}<div class="lbl">${esc(lbl)}</div><div class="fig">${fig || '—'}</div></div>`;
+const ne = (n, e) => `${fmt(n)} <small>nodes</small><br>${fmt(e)} <small>edges</small>`;
+const setNames = () => {
+  const h = S.file?.headerNames;
+  return h ? [h[0], h[1]].map(x => x.charAt(0).toUpperCase() + x.slice(1)) : ['Column 1 nodes', 'Column 2 nodes'];
+};
 
-    if (!columnSelect) return;
-
-    columnSelect.innerHTML = '<option value="auto">Auto-detect (first numeric column)</option>';
-
-    columns.forEach((col, idx) => {
-        const option = document.createElement('option');
-        option.value = idx;
-        option.textContent = `${col.name} (${col.type})`;
-        columnSelect.appendChild(option);
-    });
-
-    if (columns.length > 0) {
-        detectedColumnsSpan.textContent = columns.map(c => `${c.name} (${c.type})`).join(', ');
-        columnPreview.style.display = 'block';
-    } else {
-        detectedColumnsSpan.textContent = 'No numeric columns detected';
-        columnPreview.style.display = 'block';
-    }
+function strip(kind, mode, figs = {}) {
+  const [la, lb] = setNames();
+  if (kind === 'proj') return `<div class="strip proj${mode ? '' : ' empty'}">
+    ${panel(bipNet(), 'Bipartite input', figs.in)}${ARROW('project')}
+    ${panel(ringNet('na', 7, 3), la, figs.a)}${panel(ringNet('nb', 5, 5), lb, figs.b)}</div>`;
+  return `<div class="strip${mode ? '' : ' empty'}${mode === 'run' ? ' pruning' : ''}">
+    ${panel(denseNet(false), 'Input network', figs.in)}${ARROW('filter')}${panel(denseNet(true), 'Backbone', figs.out)}</div>`;
 }
 
-function setupGlobalThreshold() {
-    const methodOptions = document.querySelectorAll('#projectionsOptions li, #backboneOptions li');
-    const globalThresholdPanel = document.getElementById('globalThresholdPanel');
-    const applyBtn = document.getElementById('applyThresholdBtn');
-    const columnSelect = document.getElementById('thresholdColumn');
-    const directionSelect = document.getElementById('thresholdDirection');
-    const valueInput = document.getElementById('thresholdValue');
-
-    methodOptions.forEach(option => {
-        option.addEventListener('click', () => {
-            const methodText = option.textContent.toLowerCase();
-            if (methodText.includes('global threshold')) {
-                globalThresholdPanel.style.display = 'block';
-
-                const uploadedFile = sessionStorage.getItem('uploaded_file');
-                if (uploadedFile) {
-                    fetch(`${API_BASE}/get_file_columns?filename=${uploadedFile}`)
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.success) {
-                                updateThresholdPanel(data.columns);
-                            }
-                        });
-                }
-            } else {
-                globalThresholdPanel.style.display = 'none';
-            }
-        });
-    });
-
-    if (applyBtn) {
-        applyBtn.addEventListener('click', () => {
-            const selectedColumn = columnSelect.value;
-            const direction = directionSelect.value;
-            const value = parseFloat(valueInput.value);
-
-            const backendDirection = direction === 'greater' ? 'gte' : 'lte';
-
-            globalThresholdParams = {
-                column: selectedColumn === 'auto' ? 'auto' : parseInt(selectedColumn),
-                direction: backendDirection,
-                value: value
-            };
-
-            sessionStorage.setItem('threshold_params', JSON.stringify(globalThresholdParams));
-
-            console.log('Threshold parameters saved:', globalThresholdParams);
-            alert(`Threshold filter configured!\nColumn: ${selectedColumn === 'auto' ? 'Auto-detect' : columnSelect.options[columnSelect.selectedIndex].text}\nDirection: ${direction === 'greater' ? '≥' : '≤'} ${value}`);
-        });
-    }
+/* ---------- left column ---------- */
+function methodItems() {
+  const q = S.query.toLowerCase();
+  return METHODS[S.cat].filter(m => (m[1] + m[2]).toLowerCase().includes(q));
+}
+function listHTML() {
+  return methodItems().map(m => `<button data-m="${esc(m[0])}"><b>${esc(m[1])}</b><span>${esc(m[2])}</span></button>`).join('')
+    || '<p class="loading">No method matches.</p>';
+}
+function c1() {
+  const m = S.method && methodRow(S.method);
+  if (m && !S.picking) return `<div class="ch"><span class="step done">1</span><h2>Method</h2></div>
+    <div class="cb"><div class="chosen"><div><b>${esc(m[1])}</b><span>${esc(m[2])}</span></div><button class="btn" data-act="change">Change</button></div></div>`;
+  return `<div class="ch"><span class="step">1</span><h2>Method</h2><span class="aside" id="mcount">${methodItems().length} of ${METHODS[S.cat].length}</span></div>
+    <div class="cb"><div class="seg" role="group" aria-label="Method type">
+      <button data-cat="proj" aria-pressed="${S.cat === 'proj'}">Projections</button><button data-cat="bb" aria-pressed="${S.cat === 'bb'}">Backbone extraction</button></div>
+      <input class="search" id="q" placeholder="Search methods" aria-label="Search methods" value="${esc(S.query)}">
+      <div class="mlist" id="mlist">${listHTML()}</div></div>`;
 }
 
-function resetToMainPage() {
-    console.log('Resetting to main page...');
-
-    selectedMethod = null;
-    selectedCategory = null;
-    currentResultFile = null;
-    currentMethod = null;
-    lastUploadedFormData = null;
-
-    sessionStorage.removeItem('uploaded_file');
-    sessionStorage.removeItem('result_file');
-    sessionStorage.removeItem('result_file_2');
-    sessionStorage.removeItem('threshold_params');
-    sessionStorage.removeItem('selected_method');
-
-    const pBtn = document.getElementById('projectionsBtn');
-    const bBtn = document.getElementById('backboneBtn');
-    if (pBtn) pBtn.innerHTML = 'Bipartite Projections <span class="dropdown-arrow">▼</span>';
-    if (bBtn) bBtn.innerHTML = 'Backbone Extraction <span class="dropdown-arrow">▼</span>';
-
-    const projOpts = document.getElementById('projectionsOptions');
-    const bkbOpts = document.getElementById('backboneOptions');
-    if (projOpts) projOpts.style.display = 'none';
-    if (bkbOpts) bkbOpts.style.display = 'none';
-
-    const paramField = document.getElementById('paramField');
-    if (paramField) {
-        paramField.style.display = 'none';
-    }
-
-    const globalThresholdPanel = document.getElementById('globalThresholdPanel');
-    if (globalThresholdPanel) {
-        globalThresholdPanel.style.display = 'none';
-    }
-    const polyaPanelReset = document.getElementById('polyaPanel');
-    if (polyaPanelReset) {
-        polyaPanelReset.style.display = 'none';
-    }
-    const dpReset = document.getElementById('dynamicParamsPanel');
-    if (dpReset) {
-        dpReset.style.display = 'none';
-    }
-
-    const downloadSection = document.getElementById('downloadSection');
-    if (downloadSection) {
-        downloadSection.style.display = 'none';
-    }
-
-    const visualizationSection = document.getElementById('visualizationSection');
-    if (visualizationSection) {
-        visualizationSection.style.display = 'none';
-    }
-
-    const methodPanel = document.getElementById('methodPanel');
-    if (methodPanel) {
-        methodPanel.style.display = 'flex';
-    }
-
-    const continueBtn = document.getElementById('continueBtn');
-    if (continueBtn) {
-        continueBtn.style.display = 'none';
-        continueBtn.disabled = false;
-        continueBtn.textContent = 'Run Method';
-    }
-
-    const previewBox = document.getElementById('filePreviewBox');
-    if (previewBox) {
-        previewBox.style.display = 'none';
-        previewBox.textContent = '';
-    }
-
-    const fileInput = document.getElementById('fileInput');
-    if (fileInput) {
-        fileInput.value = '';
-    }
-
-    if (isGuideVisible) {
-        hideGuideContent();
-    }
-    if (isInfoVisible) {
-        hideInfoContent();
-    }
-
-    if (window.updateComparisonButtons) {
-        window.updateComparisonButtons();
-    }
-
-    const downloadMessage = document.getElementById('downloadMessage');
-    if (downloadMessage) {
-        downloadMessage.textContent = '';
-    }
-
-    const alphaInput = document.getElementById('alphaInput');
-    if (alphaInput) {
-        alphaInput.value = '0.05';
-    }
-
-    console.log('Reset completed. Application is ready for new analysis.');
-
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+function inputCheck() {
+  const f = S.file, m = S.method;
+  if (!f || !m) return null;
+  if (f.kind === 'invalid') return { block: true, msg: `<b>This is not an edge list.</b> It has ${f.cols} column; an edge list needs at least two, source and target, with one edge per row.` };
+  if (m === 'Hierarchical Backbone' && f.kind === 'projection')
+    return { block: true, msg: '<b>Hierarchical Backbone needs the bipartite file.</b> This file is a projection: both columns hold the same kind of node. Upload the original two-column edge list, or choose another backbone method.', act: 'change' };
+  if (catOf(m) === 'proj' && f.kind === 'projection')
+    return { block: false, msg: '<b>This file looks like a projection already.</b> Both columns hold the same kind of node. A projection is made from the bipartite edge list.' };
+  if (catOf(m) === 'bb' && m !== 'Hierarchical Backbone' && f.kind === 'bipartite')
+    return { block: false, msg: '<b>Backbone filters work on a one-mode network.</b> This is a bipartite edge list. Run a projection first, then choose <i>Use for backbone</i> on its result.' };
+  return null;
+}
+function c2() {
+  const f = S.file;
+  if (!f) return `<div class="ch"><span class="step">2</span><h2>Edge list</h2></div>
+    <div class="cb"><div class="drop" id="drop">Drop a .txt, .tsv or .csv file here<br><button class="btn" data-act="pick">Choose file</button></div></div>`;
+  const kind = { bipartite: 'Bipartite edge list', projection: 'One-mode network', invalid: 'Not an edge list' }[f.kind];
+  const extra = f.kind === 'bipartite' ? `${fmt(f.A)} × ${fmt(f.B)} nodes` : f.kind === 'projection' ? `${fmt(f.nodes)} nodes${f.weighted ? ' · weighted' : ''}` : '';
+  const chk = inputCheck();
+  return `<div class="ch"><span class="step done">2</span><h2>Edge list</h2></div>
+    <div class="cb"><div class="file"><div><b title="${esc(f.name)}">${esc(f.name)}</b><span>${fmt(f.rows)} rows · ${f.cols} column${f.cols === 1 ? '' : 's'} · ${f.header ? 'header row' : 'no header'}</span></div><button class="btn" data-act="pick"${S.view === 'running' ? ' disabled' : ''}>Replace</button></div>
+    <div class="tags"><span class="tag ${f.kind === 'invalid' ? 'warn' : 'kind'}">${kind}</span>${extra ? `<span class="tag">${extra}</span>` : ''}${f.nearDup ? `<span class="tag warn" title="Names that differ only by a trailing _ or space count as different nodes">${fmt(f.nearDup)} near-duplicate names</span>` : ''}</div>
+    ${chk ? `<div class="callout" role="alert"><p>${chk.msg}</p>${chk.act ? '<button class="btn" data-act="change">Choose another method</button>' : ''}</div>` : ''}</div>`;
 }
 
-function hideAllScreens() {
-    if (isGuideVisible) {
-        hideGuideContent();
+function specs() {
+  const list = [...(PARAMS[S.method] || []), HEADER];
+  const vals = Object.fromEntries(list.map(s => [s.key, S.params[S.method + '|' + s.key] ?? s.value]));
+  return list.filter(s => !s.when || s.when(vals)).map(s => {
+    if (s.key === 'col_index') {
+      const cols = S.file?.numericCols?.length ? S.file.numericCols : [2];
+      const names = S.file?.headerNames;
+      return { ...s, value: String(cols[0]), options: cols.map(i => [String(i), names?.[i] ? `${names[i]} (column ${i + 1})` : `Column ${i + 1}`]) };
     }
-    if (isInfoVisible) {
-        hideInfoContent();
-    }
+    if (s.key === 'has_header' && S.file) return { ...s, hint: `Detected: ${S.file.header ? 'yes' : 'no'}` };
+    return s;
+  });
+}
+const pval = s => S.params[S.method + '|' + s.key] ?? s.value;
+function c3() {
+  const chk = inputCheck();
+  const ready = S.method && S.file && !(chk && chk.block) && S.view !== 'running';
+  const fields = S.method ? specs().map(s => {
+    const id = 'p_' + s.key, v = pval(s);
+    const ctl = s.type === 'select'
+      ? `<select id="${id}" data-p="${s.key}">${s.options.map(([o, t]) => `<option value="${esc(o)}"${String(v) === String(o) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`
+      : `<input id="${id}" data-p="${s.key}" type="number" value="${esc(v)}"${s.min != null ? ` min="${s.min}"` : ''}${s.max != null ? ` max="${s.max}"` : ''} step="${s.step || 'any'}">`;
+    return `<div class="field"><label for="${id}"><b>${esc(s.label)}</b>${s.hint ? `<span>${esc(s.hint)}</span>` : ''}</label>${ctl}</div>`;
+  }).join('') : '';
+  const name = S.method ? methodRow(S.method)[1] : 'method';
+  return `<div class="ch"><span class="step">3</span><h2>Run</h2></div>
+    <div class="cb">${fields}<div id="perr"></div>
+    <button class="btn primary block" data-act="run" ${ready ? '' : 'disabled'}>${S.view === 'running' ? 'Running…' : 'Run ' + esc(name)}</button></div>`;
 }
 
-function hideVisualization() {
-    const visSection = document.getElementById('visualizationSection');
-    const hideBtn = document.getElementById('hideComparisonBtn');
+/* ---------- right column ---------- */
+function logHTML(lines) {
+  return lines.map(l => {
+    const c = /^\[error\]/i.test(l) ? 'x' : /^\[warn/i.test(l) ? 'w' : '';
+    return `<span${c ? ` class="${c}"` : ''}>${esc(l)}</span>`;
+  }).join('\n');
+}
+const elapsed = () => { const s = Math.floor((Date.now() - S.run.t0) / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 
-    if (visSection) {
-        visSection.style.display = 'none';
-    }
-    if (hideBtn) {
-        hideBtn.style.display = 'none';
-    }
+function work() {
+  const kind = S.method ? catOf(S.method) : S.cat, f = S.file, R = S.run;
+  if (S.view === 'empty') {
+    const figs = kind === 'proj' && f?.kind === 'bipartite' ? { in: `${fmt(f.rows)} <small>edges</small>`, a: `${fmt(f.A)} <small>nodes</small>`, b: `${fmt(f.B)} <small>nodes</small>` }
+      : kind === 'bb' && f?.kind === 'projection' ? { in: ne(f.nodes, f.edges) } : {};
+    const chk = inputCheck();
+    const hint = !S.method ? 'Choose a method and an edge list. The result appears here.'
+      : !f ? 'Add an edge list, then run.' : chk?.block ? 'Fix the input on the left to run.' : `Ready to run ${esc(methodRow(S.method)[1])}.`;
+    return `${strip(kind, false, figs)}<p class="hint">${hint}</p>`;
+  }
+  const mname = esc(methodRow(R.method)[1]);
+  if (S.view === 'running') return `<div class="status"><span class="dot run"></span><b>Running ${mname}</b><span class="aside num" id="clock">${elapsed()}</span></div>
+    ${strip(catOf(R.method), 'run', catOf(R.method) === 'bb' && R.input.kind === 'projection' ? { in: ne(R.input.nodes, R.input.edges) } : {})}
+    <div class="sect"><h3>Log</h3><div class="log" id="log">${logHTML(R.logs)}</div></div>`;
+  if (S.view === 'error') return `<div class="err" role="alert"><b>${mname} stopped</b>${esc(R.error)}</div>
+    <div class="sect"><details open><summary>Log</summary><div class="log">${logHTML(R.logs)}</div></details></div>`;
+
+  // done
+  const warns = R.logs.filter(l => /^\[warn/i.test(l)).length;
+  const logBlock = `<div class="sect"><details><summary>Log${warns ? ` · ${warns} warning${warns > 1 ? 's' : ''}` : ''}</summary><div class="log">${logHTML(R.logs)}</div></details></div>`;
+  const dl = (r, label) => `<a class="btn${label ? '' : ' primary'}" href="/download?file=${encodeURIComponent(r.name)}" download>${label || 'Download (.tsv)'}</a>`;
+  const res = R.results;
+  if (catOf(R.method) === 'proj' && res.length >= 2) {
+    const [la, lb] = setNames(), [a, b] = res, inp = R.input;
+    const figs = { in: inp.kind === 'bipartite' ? `${fmt(inp.rows)} <small>edges</small>` : '', a: a.stats ? ne(a.stats.nodes, a.stats.edges) : '', b: b.stats ? ne(b.stats.nodes, b.stats.edges) : '' };
+    const row = (r, cls, label, ex) => `<div class="out ${cls}"><div><b>${esc(label)}</b><span class="num">${r.stats ? `${fmt(r.stats.nodes)} nodes · ${fmt(r.stats.edges)} edges` : esc(r.name)}</span>${ex ? `<span> · e.g. ${esc(ex)}</span>` : ''}</div>
+      ${dl(r, 'Download (.tsv)')}<button class="btn" data-use="${esc(r.name)}">Use for backbone</button></div>`;
+    return `<div class="status"><span class="dot"></span><b>${mname} finished</b><span class="aside">${res.length} output files</span></div>
+      ${strip('proj', true, figs)}
+      <div class="sect"><div class="outs">${row(a, 'a', la, inp.example[0])}${row(b, 'b', lb, inp.example[1])}${res.slice(2).map(r => row(r, '', 'Other output')).join('')}</div></div>${logBlock}`;
+  }
+  const r = res[0], inp = R.input, st = r.stats;
+  const bb = catOf(R.method) === 'bb' && inp.kind === 'projection' && st && inp.edges > 0;
+  const pct = bb && inp.edges ? st.edges / inp.edges * 100 : null;
+  return `<div class="status"><span class="dot"></span><b>${mname} finished</b><span class="aside">${esc(r.name)}</span></div>
+    ${bb ? strip('bb', true, { in: ne(inp.nodes, inp.edges), out: ne(st.nodes, st.edges) }) + `
+    <div class="kept"><div class="track" role="img" aria-label="${pct.toFixed(1)} percent of edges kept"><i style="width:${Math.min(100, pct)}%"></i></div>
+      <p><span><b class="num">${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)} %</b> of edges kept</span><span>components <span class="num">${fmt(inp.comps)} → ${fmt(st.comps)}</span></span></p></div>`
+      : st ? `<div class="sect"><p class="num">${fmt(st.nodes)} nodes · ${fmt(st.edges)} edges</p></div>` : ''}
+    <div class="sect actions">${dl(r, catOf(R.method) === 'bb' ? 'Download backbone (.tsv)' : 'Download result (.tsv)').replace('class="btn"', 'class="btn primary"')}
+      ${res.slice(1).map(x => dl(x, 'Download ' + esc(x.name.includes('communit') ? 'communities' : 'extra file'))).join('')}
+      ${bb ? '<button class="btn" data-act="compare">Compare networks</button>' : ''}
+      ${catOf(R.method) === 'proj' ? `<button class="btn" data-use="${esc(r.name)}">Use for backbone</button>` : ''}</div>
+    <div id="cmp"></div>${logBlock}`;
+}
+function extra() {
+  const f = S.file;
+  if (!f || !f.preview.length) return '';
+  const n = Math.min(3, f.cols);
+  const head = f.headerNames ? f.headerNames.slice(0, n) : ['column 1', 'column 2', 'column 3'].slice(0, n);
+  return `<div class="card" style="margin-top:12px"><div class="ch"><h2>File preview</h2><span class="aside">first ${f.preview.length} of ${fmt(f.rows)} rows</span></div>
+    <div class="cb"><div class="tbl"><table><tr>${head.map((h, i) => `<th${i === 2 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr>
+    ${f.preview.map(r => `<tr>${r.slice(0, n).map((c, i) => `<td${i === 2 ? ' class="r"' : ''}>${esc(c ?? '')}</td>`).join('')}</tr>`).join('')}</table></div></div></div>`;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function render() {
+  $('c1').innerHTML = c1(); $('c2').innerHTML = c2(); $('c3').innerHTML = c3();
+  $('work').innerHTML = work(); $('extra').innerHTML = extra();
+}
 
-    setupChooseMethod();
-
-    setupGuideButton();
-
-    const { updateButtonsState } = setupComparisonButtons();
-    window.updateComparisonButtons = updateButtonsState;
-
-    setupGlobalThreshold();
-
-    const mainPageBtn = document.getElementById('mainPageBtn');
-    if (mainPageBtn) {
-        mainPageBtn.addEventListener('click', resetToMainPage);
+/* ---------- actions ---------- */
+// A new input invalidates the server copy and any per-file choice (the Global
+// Threshold column list depends on the file).
+function setInput(f, fileObj, uploaded) {
+  S.file = f; S.fileObj = fileObj; S.uploaded = uploaded; S.view = 'empty';
+  for (const k in S.params) if (k.endsWith('|col_index')) delete S.params[k];
+}
+async function readFile(file) {
+  if (S.view === 'running') return;   // the running job would otherwise store its upload as the new file's
+  const f = analyse(await file.text(), file.name);
+  setInput(f, file, null);
+  if (!S.method) S.cat = f.kind === 'projection' ? 'bb' : 'proj';
+  render();
+}
+function paramsForRun() {
+  const out = {};
+  for (const s of specs()) {
+    const v = pval(s);
+    if (s.type === 'select') out[s.key] = String(v);
+    else if (v !== '' && !isNaN(parseFloat(v))) out[s.key] = parseFloat(v);
+  }
+  if (S.method === 'Global Threshold Filter') { out.col_index = parseInt(out.col_index, 10); out.chunk_size = 50000; }
+  for (const s of specs()) {
+    const v = out[s.key];
+    if (s.type === 'select' || v == null) continue;
+    if ((s.min != null && v < s.min) || (s.max != null && v > s.max))
+      throw new Error(s.max != null ? `${s.label} must be between ${s.min} and ${s.max}.` : `${s.label} must be at least ${s.min}.`);
+  }
+  return out;
+}
+async function json(url, opts) {
+  const r = await fetch(url, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.success === false) throw new Error(d.message || `Request failed (${r.status})`);
+  return d;
+}
+async function run() {
+  let params;
+  try { params = paramsForRun(); } catch (e) { $('perr').innerHTML = `<p class="callout" role="alert">${esc(e.message)}</p>`; return; }
+  S.run = { method: S.method, t0: Date.now(), logs: [], input: S.file, results: [] };
+  S.view = 'running'; render();
+  const clock = setInterval(() => { const c = $('clock'); if (c) c.textContent = elapsed(); }, 1000);
+  try {
+    if (!S.uploaded) {
+      const fd = new FormData(); fd.append('file', S.fileObj); fd.append('method', S.method);
+      S.uploaded = (await json('/upload', { method: 'POST', body: fd })).uploaded_file;
     }
+    const { task_id } = await json('/process', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploaded_file: S.uploaded, method: S.method, ...params }) });
+    let st;
+    for (;;) {
+      await new Promise(r => setTimeout(r, 800));
+      st = await (await fetch(`/task_status/${task_id}`)).json();
+      S.run.logs = st.logs || [];
+      const log = $('log'); if (log) { log.innerHTML = logHTML(S.run.logs); log.scrollTop = log.scrollHeight; }
+      if (st.status !== 'running') break;
+    }
+    if (st.status !== 'done') throw new Error(st.error || 'The run stopped without a result.');
+    const names = Object.values(st.result?.files || {}).filter(v => typeof v === 'string' && v);
+    if (!names.length) throw new Error('The run finished but returned no result file.');
+    S.run.results = await Promise.all(names.map(async name => {
+      try {
+        const text = await (await fetch(`/download?file=${encodeURIComponent(name)}`)).text();
+        const a = analyse(text, name);
+        return { name, stats: a.kind === 'invalid' ? null : oneMode(text.split(/\r?\n/).filter(l => l.trim()).slice(a.header ? 1 : 0)
+          .map(l => (a.sep ? l.split(a.sep) : l.trim().split(/\s+/)).map(c => c.trim()))) };
+      } catch { return { name, stats: null }; }
+    }));
+    S.view = 'done';
+  } catch (e) {
+    S.run.error = e.message; S.view = 'error';
+  } finally {
+    clearInterval(clock); render();
+  }
+}
+async function compare(btn) {
+  const R = S.run, box = $('cmp');
+  btn.disabled = true; box.innerHTML = '<div class="sect loading">Drawing both networks…</div>';
+  try {
+    const d = await json('/visualize/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ before_file: S.uploaded, after_file: R.results[0].name, method: R.method }) });
+    const fig = (img, label, s) => `<figure><img src="data:image/png;base64,${img}" alt="${label}: ${s.nodes} nodes, ${s.edges} edges"><figcaption>${label} · ${fmt(s.nodes)} nodes · ${fmt(s.edges)} edges · density ${s.density.toFixed(4)}</figcaption></figure>`;
+    box.innerHTML = `<div class="sect"><div class="compare">${fig(d.image_before, 'Input network', d.stats_before)}${fig(d.image_after, 'Backbone', d.stats_after)}</div></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="err" role="alert"><b>Comparison failed</b>${esc(e.message)}</div>`;
+    btn.disabled = false;
+  }
+}
+async function useForBackbone(name) {
+  let text;
+  try {
+    const r = await fetch(`/download?file=${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(`the server answered ${r.status}`);
+    text = await r.text();
+  } catch (e) {
+    S.run.error = `Could not load ${name}: ${e.message}. Download it and add it as the edge list instead.`;
+    S.view = 'error'; render(); return;
+  }
+  setInput(analyse(text, name), null, name);   // already on the server: no new upload
+  S.cat = 'bb'; S.method = null; S.picking = true; S.query = '';
+  render(); scrollTo({ top: 0, behavior: 'smooth' });
+}
 
-    console.log('PRED-BiPN application initialized');
-
-    setTimeout(() => {
-        const dynamicText = document.getElementById('dynamic-text');
-        if (dynamicText) {
-            dynamicText.style.opacity = '0.3';
-            dynamicText.style.transition = 'opacity 1s ease';
-        }
-    }, 5000);
+document.addEventListener('click', e => {
+  const t = e.target.closest('button'); if (!t || t.disabled) return;
+  if (t.dataset.cat) { S.cat = t.dataset.cat; S.query = ''; render(); $('q')?.focus(); }
+  else if (t.dataset.m) { S.method = t.dataset.m; S.picking = false; if (S.view !== 'running') S.view = 'empty'; render(); }
+  else if (t.dataset.use) useForBackbone(t.dataset.use);
+  else if (t.dataset.act === 'change') { S.picking = true; S.cat = S.method ? catOf(S.method) : S.cat; render(); $('q')?.focus(); }
+  else if (t.dataset.act === 'pick') $('file').click();
+  else if (t.dataset.act === 'run') run();
+  else if (t.dataset.act === 'compare') compare(t);
 });
-
+document.addEventListener('input', e => {
+  if (e.target.id === 'q') { S.query = e.target.value; $('mlist').innerHTML = listHTML(); $('mcount').textContent = `${methodItems().length} of ${METHODS[S.cat].length}`; }
+  else if (e.target.dataset.p) S.params[S.method + '|' + e.target.dataset.p] = e.target.value;
+});
+document.addEventListener('change', e => {
+  if (e.target.dataset.p) {
+    S.params[S.method + '|' + e.target.dataset.p] = e.target.value;
+    if (e.target.tagName === 'SELECT') { $('c3').innerHTML = c3(); $('p_' + e.target.dataset.p)?.focus(); }
+  }
+  if (e.target.id === 'file' && e.target.files[0]) { readFile(e.target.files[0]); e.target.value = ''; }
+});
+// A file dropped anywhere else would make the browser open it and lose the session.
+document.addEventListener('dragover', e => { e.preventDefault(); e.target.closest?.('.drop')?.classList.add('over'); });
+document.addEventListener('dragleave', e => e.target.closest?.('.drop')?.classList.remove('over'));
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const d = e.target.closest?.('.drop'); if (!d) return;
+  d.classList.remove('over');
+  const f = e.dataTransfer.files[0]; if (f) readFile(f);
+});
+// dark is the default; the choice is remembered (see the inline script in login.html)
+$('theme').onclick = () => {
+  const r = document.documentElement, next = r.dataset.theme === 'light' ? 'dark' : 'light';
+  if (next === 'dark') delete r.dataset.theme; else r.dataset.theme = 'light';
+  try { localStorage.setItem('theme', next); } catch (e) {}
+};
+// Tool / Help / Info are sections of this page, switched by the URL hash
+function showPage() {
+  const page = ['help', 'info'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'tool';
+  ['tool', 'help', 'info'].forEach(p => { $('page-' + p).hidden = p !== page; });
+  document.querySelectorAll('nav a[data-page]').forEach(a => a.toggleAttribute('aria-current', a.dataset.page === page));
+  if (page !== 'tool') scrollTo(0, 0);
+}
+addEventListener('hashchange', showPage);
+showPage();
+render();
