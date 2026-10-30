@@ -6,12 +6,12 @@ from collections import defaultdict
 from tqdm import tqdm
 
 class TrueMultiscaleBackbone:
-    def __init__(self, max_iter=200, tol=1e-6, smoothing_power=2,
+    def __init__(self, max_iter=1000, tol=1e-12, epsilon=1e-4,
                  significance_level=0.05, sparsity_adjustment=True,
                  early_stop_percentile=5, min_edges=None, directed=False):
         self.max_iter = max_iter
         self.tol = tol
-        self.smoothing_power = smoothing_power
+        self.epsilon = epsilon
         self.significance_level = significance_level
         self.sparsity_adjustment = sparsity_adjustment
         self.early_stop_percentile = early_stop_percentile
@@ -27,20 +27,26 @@ class TrueMultiscaleBackbone:
         return sep if separators[sep] > 0 else '\t'
 
     def _make_doubly_stochastic(self, matrix):
-        matrix = matrix.tocsr()
-        for _ in range(self.max_iter):
-            row_sums = matrix.sum(axis=1).A.ravel()
-            row_sums[row_sums == 0] = 1
-            matrix = matrix.multiply(1 / row_sums[:, None])
-
-            col_sums = matrix.sum(axis=0).A.ravel()
-            col_sums[col_sums == 0] = 1
-            matrix = matrix.multiply(1 / col_sums)
-
-            if np.max(np.abs(1 - matrix.sum(axis=1).A.ravel())) < self.tol and \
-               np.max(np.abs(1 - matrix.sum(axis=0).A.ravel())) < self.tol:
+        """Sinkhorn-Knopp on W + epsilon (every cell, as in the reference code of
+        Coscia and netbone): a sparse W usually has no doubly stochastic scaling
+        (no total support), a positive matrix always has one. The dense matrix is
+        never built: the scaled matrix is diag(r) (W + eps) diag(c), so
+        row sums = r * (W c + eps * sum(c)) and column sums likewise.
+        Stops when std(row sums) < tol, as the reference does.
+        Returns the scaled values on the nonzero cells of W."""
+        W = matrix.tocsr()
+        eps = self.epsilon
+        r = np.ones(W.shape[0]); c = np.ones(W.shape[1])
+        for it in range(1, self.max_iter + 1):
+            r = 1 / (W @ c + eps * c.sum())
+            c = 1 / (W.T @ r + eps * r.sum())
+            if np.std(r * (W @ c + eps * c.sum())) < self.tol:
                 break
-        return matrix.power(self.smoothing_power)
+        else:
+            print(f"Warning: Sinkhorn did not converge in {self.max_iter} iterations")
+        print(f"Sinkhorn converged in {it} iterations (epsilon={eps})")
+        coo = W.tocoo()
+        return csr_matrix((r[coo.row] * (coo.data + eps) * c[coo.col], (coo.row, coo.col)), shape=W.shape)
 
     def _tarjan_strongly_connected(self, adj_list):
         index = 0
@@ -81,9 +87,49 @@ class TrueMultiscaleBackbone:
 
         return components
 
-    def _build_backbone(self, matrix, node_names):
+    def _build_backbone_slater(self, edges, node_names, target_components):
+        """Slater (2009), adapted to a disconnected input: add edges in decreasing
+        order until the backbone has as many connected components as the input
+        (weak components for a directed network)."""
+        parent = list(range(len(node_names)))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        G = nx.DiGraph() if self.directed else nx.Graph()
+        G.add_nodes_from(node_names)
+        components = len(node_names)
+        for i, j, w in edges:
+            G.add_edge(node_names[i], node_names[j], weight=w)
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+                components -= 1
+                if components == target_components:
+                    print(f"Stopping: backbone has {components} components, as the input")
+                    break
+        return G
+
+    def _build_backbone(self, matrix, node_names, target_components=None):
+        """Edges are taken in decreasing order of the doubly stochastic value.
+
+        mode 'slater': only Slater's rule (see _build_backbone_slater).
+        Other modes apply, per edge, in this order:
+          1. an edge below significance_level is skipped (the edges are sorted,
+             so no later edge is kept either);
+          2. the edge is added;
+          3. stop if its value is below the early_stop_percentile-th
+             percentile of all values (not applied before min_edges edges);
+          4. every 1,000 edges, stop if the nodes reached so far form a single
+             (strongly) connected component.
+        """
         coo = matrix.tocoo()
         edges = sorted(zip(coo.row, coo.col, coo.data), key=lambda x: -x[2])
+        if target_components is not None:
+            return self._build_backbone_slater(edges, node_names, target_components)
 
         weights = [w for _, _, w in edges]
         percentile_threshold = np.percentile(weights, self.early_stop_percentile)
@@ -119,20 +165,18 @@ class TrueMultiscaleBackbone:
 
         return G
 
-    def extract_backbone(self, edge_list_path, output_path, mode='strict',
+    def extract_backbone(self, edge_list_path, output_path, mode='slater',
                          nrows=None, logger=None):
+        # mode 'slater' (default): Slater (2009) only. mode 'strict': a PRED-BiPN
+        # heuristic, the significance_level given to __init__ (the interface's
+        # alpha) plus a 20th-percentile stop; see _build_backbone for the order.
+        if mode not in ('slater', 'strict'):
+            raise ValueError(f"mode must be 'slater' or 'strict', not {mode!r}")
         if mode == 'strict':
             self.early_stop_percentile = 20
-            self.significance_level = 0.05
             self.min_edges = None
-        elif mode == 'balanced':
-            self.early_stop_percentile = 1
-            self.significance_level = 0.001
-            self.min_edges = 100
-        elif mode == 'full':
-            self.early_stop_percentile = 0
-            self.significance_level = 0
-            self.min_edges = None
+        print(f"Parameters: mode={mode}, directed={self.directed}"
+              + (f", alpha={self.significance_level}" if mode == 'strict' else ''))
 
         print("Loading network...")
         try:
@@ -196,8 +240,17 @@ class TrueMultiscaleBackbone:
         if not self.directed:
             normalized = triu(normalized.maximum(normalized.T), k=1).tocsr()
 
+        target = None
+        if mode == 'slater':
+            inp = nx.DiGraph() if self.directed else nx.Graph()
+            inp.add_nodes_from(nodes)
+            inp.add_edges_from(zip(df['source'], df['target']))
+            target = nx.number_weakly_connected_components(inp) if self.directed \
+                else nx.number_connected_components(inp)
+            print(f"Input network: {target} connected components")
+
         print("Extracting backbone...")
-        backbone = self._build_backbone(normalized, nodes)
+        backbone = self._build_backbone(normalized, nodes, target)
 
         print(f"\nResults:")
         print(f"  Nodes: {backbone.number_of_nodes()}")
@@ -215,10 +268,13 @@ class TrueMultiscaleBackbone:
         return backbone
 
 if __name__ == "__main__":
-    extractor = TrueMultiscaleBackbone()
-    extractor.extract_backbone(
-        "weighted_gene_edges_one_mode.tsv",
-        "ds_backbone.csv",
-        mode='strict',
-        nrows=None
-    )
+    import argparse
+    parser = argparse.ArgumentParser(description='Doubly stochastic backbone (Slater 2009)')
+    parser.add_argument('input', help='Weighted edge list with a header row')
+    parser.add_argument('output', help='Output TSV')
+    parser.add_argument('--mode', choices=['slater', 'strict'], default='slater', help='Stopping rule (default slater)')
+    parser.add_argument('--alpha', type=float, default=0.05, help='Significance level, strict rule only (default 0.05)')
+    parser.add_argument('--directed', action='store_true', help='Treat the network as directed')
+    args = parser.parse_args()
+    TrueMultiscaleBackbone(significance_level=args.alpha, directed=args.directed).extract_backbone(
+        args.input, args.output, mode=args.mode)

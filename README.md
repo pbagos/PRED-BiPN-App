@@ -27,10 +27,10 @@ chmod +x run_app.sh
 ## How to Use
 
 1. Start the app: double-click `RUN_APP.bat` (Windows) or run `./run_app.sh` (Mac/Linux)
-2. Upload your file in CSV or TSV format
-3. Select a method from the 23 available algorithms
-4. Set the method's parameters, then click Run Method
-5. Download the results (TSV) when the run completes; for backbone methods you can also Compare Networks to view the original vs filtered network side by side
+2. Choose a method (Projections or Backbone extraction; the search box filters the 23 methods)
+3. Add your edge list (CSV, TSV or TXT). The page reports the header row, whether the file is bipartite or one-mode, and the node counts, and warns when the file does not suit the method
+4. Set the method's parameters and click Run; the log shows every parameter used
+5. Download the result (TSV). A projection gives one network per node set, and "Use for backbone" filters one of them straight away; a backbone shows the nodes, edges and components kept, and Compare networks draws the input and the backbone side by side
 
 ## Input File Formats
 
@@ -88,6 +88,10 @@ Each method shows only the parameters it needs:
 - Backbone filters: a significance level, z-score, or threshold appropriate to the method.
 - Edge Betweenness: computes the betweenness of every edge once (Brandes 2001; Girvan & Newman 2002), with weights turned into lengths 1/w, and keeps edges with betweenness >= factor x mean (default factor 1). Options: use weights (yes/no) and a number of sampled source nodes (0 = exact). Install `igraph` for speed; without it NetworkX gives the same result more slowly.
 - Noise Corrected, Doubly Stochastic and Polya: undirected by default (A-B and B-A are one edge), with a Directed option. Polya defaults to a = -1 (maximum-likelihood estimate of a).
+- Noise Corrected (Coscia & Neffke 2017): computed exactly as the authors' `backboning.py` (binomial model, Beta prior fitted by the method of moments); an edge is kept if score - delta x sd > 0. Parameters: delta (default 3.09), directed (default no).
+- Doubly Stochastic (Slater 2009): the weight matrix (symmetric when undirected) plus 0.0001 in every cell, as in the reference code, is scaled with Sinkhorn-Knopp until std(row sums) < 1e-12; edges are then added in decreasing order of value. Stopping rule `slater` (default): stop when the backbone has as many connected components as the input. Rule `strict` (a PRED-BiPN heuristic, not in Slater): per edge, (1) skip it if below alpha (the interface value, default 0.05), (2) add it, (3) stop if below the 20th percentile of all values, (4) every 1,000 edges stop if the nodes reached form one component. Parameters: rule, directed, alpha (strict only).
+- Modularity Filter (Rajeh et al. 2022, Algorithm 1): weighted Louvain partition (seed, default 42); the modularity vitality of every node computed once on the original network; the backbone is the subgraph of the share of nodes with the largest |vitality| (default 0.30, rounded up; ties in alphabetical order). `keep_lcc` (default off) keeps only the largest connected component, as in the article; our projections are fragmented from the start, so it is off by default.
+- Every run writes all its parameters to the log, so a result can be reproduced.
 - Every method: a "First row is a header" option (auto-detect by default). Hierarchical Backbone needs the original two-column bipartite file and rejects a projection.
 
 Results are written as tab-separated (TSV) files:

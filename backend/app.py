@@ -60,7 +60,7 @@ IS_RENDER = os.environ.get('RENDER', False)
 if IS_RENDER:
     app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
 else:
-    app.config['UPLOAD_FOLDER'] = os.path.abspath('tmp')
+    app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 if IS_RENDER:
@@ -120,6 +120,9 @@ def _execute_processing(data, task_id):
             raw_path = os.path.join(app.config['UPLOAD_FOLDER'], uploaded_filename)
             log(f'Starting: {method}')
             log(f'Input file: {uploaded_filename}')
+            # what the user sent, so a run can be reproduced; per-method lines add the defaults used
+            sent = {k: v for k, v in data.items() if k not in ('method', 'uploaded_file')}
+            log('Parameters sent: ' + (', '.join(f'{k}={v}' for k, v in sorted(sent.items())) or 'none (defaults)'))
             # every method reads the same canonical TSV with a header row
             input_path = os.path.join(app.config['UPLOAD_FOLDER'], f'input_{safe_method}_{ts}.tsv')
             normalize_input(raw_path, input_path, has_header=data.get('has_header', 'auto'), logger=app.logger)
@@ -143,11 +146,14 @@ def _execute_processing(data, task_id):
             elif method.lower() == "doubly stochastic filter":
                 output_path = os.path.join(app.config["UPLOAD_FOLDER"], f'result_{safe_method}_{ts}.tsv')
                 directed = str(data.get('directed', 'false')).lower() == 'true'
+                ds_mode = str(data.get('ds_mode', 'slater')).lower()
+                app.logger.info(f"Parameters: rule={ds_mode}, directed={directed}"
+                                + (f", alpha={alpha}" if ds_mode == 'strict' else ''))
                 extractor = TrueMultiscaleBackbone(significance_level=alpha, directed=directed)
                 extractor.extract_backbone(
                     edge_list_path=input_path,
                     output_path=output_path,
-                    mode='strict',
+                    mode=ds_mode,
                     nrows=None,
                     logger=app.logger
                 )
@@ -261,23 +267,25 @@ def _execute_processing(data, task_id):
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
                 extractor = NoiseCorrectedBackbone(
                     input_file=input_path, output_file=output_path,
-                    delta=3.09, alpha_prior=alpha, one_sided=False,
-                    max_workers=cpu_count(), limit=None,
+                    delta=float(data.get('delta', 3.09)), limit=None,
                     directed=str(data.get('directed', 'false')).lower() == 'true'
                 )
+                app.logger.info(f"Parameters: delta={extractor.delta}, directed={extractor.directed}")
                 if not extractor.load_data_flexible():
                     raise RuntimeError('Failed to load data for Noise Corrected Filter.')
                 nc_df = extractor.noise_corrected_backbone()
                 backbone = nc_df[nc_df['significant']].copy()
                 if backbone.empty:
                     raise RuntimeError('No significant edges found.')
-                params = {'filter_type': 'noise_corrected', 'delta': extractor.delta,
-                          'alpha_prior': extractor.alpha_prior, 'row_limit': extractor.limit}
+                params = {'filter_type': 'noise_corrected', 'delta': extractor.delta}
                 extractor.save_filtered_edges(backbone, params)
                 result_files = {'result_file': os.path.basename(output_path)}
 
             elif method.lower() == "modularity filter":
-                mf = ModularityFilter(percentage=0.3, test_mode=False)
+                mf = ModularityFilter(percentage=float(data.get('percentage', 0.3)),
+                                      seed=int(data.get('seed', 42)),
+                                      keep_lcc=str(data.get('keep_lcc', 'false')).lower() == 'true')
+                app.logger.info(f"Parameters: percentage={mf.percentage}, seed={mf.seed}, keep_lcc={mf.keep_lcc}")
                 output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"result_{safe_method}_{ts}.tsv")
                 stats = mf.run(input_path, output_path)
                 if not stats['success']:

@@ -1,27 +1,23 @@
 import argparse
-import datetime
-import gc
 import warnings
-from functools import partial
-from multiprocessing import Pool, cpu_count
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-from scipy.stats import beta, norm
-from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
 class NoiseCorrectedBackbone:
-    def __init__(self, input_file, output_file, delta=1.64, alpha_prior=1.0, one_sided=False, max_workers=None, limit=None, directed=False):
+    """Noise-corrected backbone of Coscia & Neffke (2017), computed exactly as in
+    their reference code (backboning.py, noise_corrected + thresholding): a
+    binomial model of each edge weight with a Beta prior fitted by the method of
+    moments. An edge is kept if score - delta * sdev > 0 (delta = 3.09 by default)."""
+
+    def __init__(self, input_file, output_file, delta=3.09, limit=None, directed=False):
         self.input_file = input_file
         self.output_file = output_file
         self.delta = delta
-        self.alpha_prior = alpha_prior
-        self.one_sided = one_sided
-        self.max_workers = max_workers
         self.limit = limit
         self.directed = directed
         self.df = None
@@ -159,148 +155,40 @@ class NoiseCorrectedBackbone:
 
         return True
 
-    def calculate_edge_stats(self, row, N_total, alpha_prior, delta, one_sided=False, eps=1e-12):
-        """
-        Numerically-stable calculation of per-edge statistics.
-        Returns a dict with extra fields: E_ij, L_ij, L_tilde, P_ij, V_Nij,
-        V_L_tilde, significant, z_score
-        """
-        try:
-            Nij = float(row['_weight'])
-            Ni = float(row['N_i'])
-            Nj = float(row['N_j'])
-            N = float(N_total)
-
-            if Ni <= 0 or Nj <= 0 or N <= 0:
-                out = {
-                    '_source': row['_source'],
-                    '_target': row['_target'],
-                    '_weight': row['_weight'],
-                    'N_i': Ni,
-                    'N_j': Nj,
-                    'E_ij': 0.0,
-                    'L_ij': 0.0,
-                    'L_tilde': 0.0,
-                    'P_ij': 0.0,
-                    'V_Nij': 0.0,
-                    'V_L_tilde': 0.0,
-                    'significant': False,
-                    'z_score': 0.0
-                }
-                return out
-
-            E_ij = (Ni * Nj) / (N + eps)
-
-            alpha_post = Nij + alpha_prior
-            beta_post = (N - Nij) + alpha_prior
-            S = alpha_post + beta_post + eps
-
-            P_ij = alpha_post / S
-
-            V_Nij = N * P_ij * (1.0 - P_ij) * (S + N) / (S + 1.0 + eps)
-            if not np.isfinite(V_Nij) or V_Nij < 0:
-                V_Nij = 0.0
-
-            E_safe = E_ij + eps
-            kappa = 1.0 / E_safe
-            dE_dnij = ((Nj + Ni) / (N + eps)) - ((Ni * Nj) / ((N + eps) ** 2))
-            d_kappa = - dE_dnij / (E_safe * E_safe + eps)
-
-            L_ij = Nij / E_safe
-            L_tilde = (L_ij - 1.0) / (L_ij + 1.0 + eps)
-
-            numerator = 2.0 * (kappa + Nij * d_kappa)
-            denominator = (kappa * Nij + 1.0) ** 2 + eps
-            V_L_tilde = V_Nij * ( (numerator / denominator) ** 2 )
-
-            if not np.isfinite(V_L_tilde) or V_L_tilde <= 0:
-                V_L_tilde = eps
-
-            z_score = float(L_tilde / np.sqrt(V_L_tilde + eps))
-
-            if one_sided:
-                significant = bool(np.isfinite(z_score) and (z_score > delta))
-            else:
-                significant = bool(np.isfinite(z_score) and (abs(z_score) > delta))
-
-            result = {
-                '_source': row['_source'],
-                '_target': row['_target'],
-                '_weight': row['_weight'],
-                'N_i': Ni,
-                'N_j': Nj,
-                'E_ij': float(E_ij),
-                'L_ij': float(L_ij),
-                'L_tilde': float(L_tilde),
-                'P_ij': float(P_ij),
-                'V_Nij': float(V_Nij),
-                'V_L_tilde': float(V_L_tilde),
-                'significant': significant,
-                'z_score': float(z_score)
-            }
-            return result
-
-        except Exception as e:
-            result = {
-                '_source': row['_source'],
-                '_target': row['_target'],
-                '_weight': row['_weight'],
-                'N_i': row.get('N_i', 0),
-                'N_j': row.get('N_j', 0),
-                'significant': False,
-                'z_score': 0.0,
-                'E_ij': 0.0,
-                'L_ij': 0.0,
-                'L_tilde': 0.0,
-                'P_ij': 0.0,
-                'V_Nij': 0.0,
-                'V_L_tilde': 0.0
-            }
-            return result
-
-    def process_chunk(self, chunk, N_total, alpha_prior, delta, one_sided=False):
-        results = []
-        for _, row in chunk.iterrows():
-            results.append(self.calculate_edge_stats(row, N_total, alpha_prior, delta, one_sided=one_sided))
-        return pd.DataFrame(results)
-
     def noise_corrected_backbone(self):
         assert self.df is not None, "Data not loaded. Call load_data_flexible() first."
-        df = self.df.copy()
+        t = self.df[['_source', '_target', '_weight']].astype({'_weight': 'float64'})
+        if not self.directed:
+            # undirected: every edge in both directions (backboning.read with
+            # triangular_input=True), so N.. = 2 * sum(w) and N_i = N_.i = strength
+            t = pd.concat([t, t.rename(columns={'_source': '_target', '_target': '_source'})])
+        t = t.drop_duplicates(subset=['_source', '_target']).reset_index(drop=True)
 
-        df['_weight'] = df['_weight'].astype('float64')
+        nij = t['_weight']
+        Ni = t['_source'].map(t.groupby('_source')['_weight'].sum())
+        Nj = t['_target'].map(t.groupby('_target')['_weight'].sum())
+        N = nij.sum()
+        mean_prior = Ni * Nj / N / N
+        kappa = N / (Ni * Nj)
+        score = (kappa * nij - 1) / (kappa * nij + 1)
+        var_prior = (1 / N ** 2) * (Ni * Nj * (N - Ni) * (N - Nj)) / (N ** 2 * (N - 1))
+        alpha_prior = (mean_prior ** 2 / var_prior) * (1 - mean_prior) - mean_prior
+        beta_prior = (mean_prior / var_prior) * (1 - mean_prior ** 2) - (1 - mean_prior)
+        alpha_post = alpha_prior + nij
+        beta_post = N - nij + beta_prior
+        expected_pij = alpha_post / (alpha_post + beta_post)
+        variance_nij = expected_pij * (1 - expected_pij) * N
+        d = 1.0 / (Ni * Nj) - N * ((Ni + Nj) / (Ni * Nj) ** 2)
+        variance_cij = variance_nij * ((2 * (kappa + nij * d)) / ((kappa * nij + 1) ** 2)) ** 2
 
-        print("Calculating node strengths...")
-        if self.directed:
-            node_strength_out = df.groupby('_source')['_weight'].sum()
-            node_strength_in = df.groupby('_target')['_weight'].sum()
-            N_total = float(df['_weight'].sum())
-        else:
-            # undirected: one strength per node (both columns), and the symmetric
-            # weight matrix counts every edge twice, so N.. = 2 * sum(w)
-            strength = df.groupby('_source')['_weight'].sum().add(
-                df.groupby('_target')['_weight'].sum(), fill_value=0)
-            node_strength_out = node_strength_in = strength
-            N_total = 2.0 * float(df['_weight'].sum())
-
-        df['N_i'] = df['_source'].map(node_strength_out).astype('float64')
-        df['N_j'] = df['_target'].map(node_strength_in).astype('float64')
-
-        chunk_size = min(50000, max(1000, len(df) // max(1, (cpu_count()))))
-        chunks = [df.iloc[i:i + chunk_size].copy() for i in range(0, len(df), chunk_size)]
-
-        workers = self.max_workers if self.max_workers is not None else min(cpu_count(), 8)
-        process_func = partial(self.process_chunk, N_total=N_total, alpha_prior=self.alpha_prior,
-                              delta=self.delta, one_sided=self.one_sided)
-
-        results = []
-        print(f"Processing {len(df):,} edges in {len(chunks)} chunk(s) using {workers} worker(s)")
-        with Pool(processes=workers) as pool:
-            for result in tqdm(pool.imap(process_func, chunks), total=len(chunks), desc="Processing edges"):
-                results.append(result)
-
-        final_df = pd.concat(results, ignore_index=True)
-        return final_df
+        t['N_i'], t['N_j'] = Ni, Nj
+        t['score'] = score
+        t['sdev_cij'] = variance_cij ** .5
+        t['significant'] = (t['score'] - self.delta * t['sdev_cij']) > 0
+        if not self.directed:
+            t = t[t['_source'] <= t['_target']]   # one row per undirected edge, as in backboning.py
+        print(f"Significant edges (delta={self.delta}): {int(t['significant'].sum())} of {len(t)}")
+        return t.reset_index(drop=True)
 
     def save_filtered_edges(self, backbone, params=None):
         try:
@@ -366,9 +254,7 @@ def main():
     parser.add_argument('--output', type=str, default='filtered_edges.tsv', help='Output TSV filename')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of input rows processed')
     parser.add_argument('--input', type=str, required=True, help='Input file')
-    parser.add_argument('--alpha', type=float, default=1.0, help='Alpha prior for Beta')
-    parser.add_argument('--one-sided', action='store_true', help='Use one-sided z test (positive L_tilde only)')
-    parser.add_argument('--workers', type=int, default=None, help='Number of parallel workers')
+    parser.add_argument('--directed', action='store_true', help='Treat the network as directed')
 
     parser.add_argument('--source-col', default=None, help='Source column name or index')
     parser.add_argument('--target-col', default=None, help='Target column name or index')
@@ -393,10 +279,8 @@ def main():
         input_file=args.input,
         output_file=args.output,
         delta=args.delta,
-        alpha_prior=args.alpha,
-        one_sided=args.one_sided,
-        max_workers=args.workers,
-        limit=args.limit
+        limit=args.limit,
+        directed=args.directed
     )
 
     if backbone_extractor.load_data_flexible(
@@ -418,7 +302,6 @@ def main():
                 'filter_type': 'standard',
                 'delta': args.delta,
                 'row_limit': args.limit,
-                'alpha': args.alpha,
                 'source_col': args.source_col,
                 'target_col': args.target_col,
                 'weight_col': args.weight_col

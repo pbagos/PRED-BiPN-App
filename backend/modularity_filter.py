@@ -1,21 +1,25 @@
+import math
 import networkx as nx
-import time
 import pandas as pd
 from community import community_louvain
 import numpy as np
 from scipy import sparse
-from tqdm import tqdm
 
 class SparseModularityBackbone:
-    """Modularity-vitality backbone (Magelinski et al.): repeatedly remove the
-    node whose removal changes the modularity Q of the Louvain partition the
-    least, until `percentage` of the nodes is left.
+    """Modularity vitality backbone, Rajeh et al. (2022), Algorithm 1.
 
-    Q = sum_c [ in_c / m - (tot_c / 2m)^2 ], m = total edge weight. Removing
-    node i (community c, strength k_i, weight K[i,d] to community d) gives
+    Louvain partition of the original network (weighted, fixed seed); the
+    vitality of every node, alpha(v) = Q(G) - Q(G without v), computed once on
+    the original network with that partition; the nodes ranked by |alpha(v)|;
+    the backbone is the subgraph induced by the `percentage` of nodes with the
+    largest |alpha(v)| (rounded up, as netbone's fraction_filter). Everything is
+    weighted: m, the strengths and the adjacency matrix.
+
+    Q = sum_c [ in_c / m - (tot_c / 2m)^2 ]. Removing node i (community c,
+    strength k_i, weight K[i,d] to community d) gives
         m' = m - k_i,  in_c' = in_c - K[i,c],
         tot_d' = tot_d - K[i,d]  (d != c),  tot_c' = tot_c - K[i,c] - k_i,
-    so the vitality of every node is one vectorised pass over K per step.
+    so all vitalities are one vectorised pass over K.
     """
 
     def __init__(self, G, seed=42):
@@ -25,6 +29,7 @@ class SparseModularityBackbone:
         self.nodes = sorted(G.nodes(), key=str)
         self.node_index = {node: i for i, node in enumerate(self.nodes)}
         self.n_nodes = len(self.nodes)
+        self.vitalities = None
 
         rows, cols, data = [], [], []
         for u, v, d in G.edges(data=True):
@@ -47,49 +52,34 @@ class SparseModularityBackbone:
             Q2 = (S_in - own) / m2 - S_sq2 / (4 * m2 * m2)
         return np.where(m2 > 0, Q - Q2, 0.0)
 
-    def extract_backbone(self, percentage=0.3):
-        print("Computing initial partition using Louvain method...")
+    def node_vitalities(self):
+        """{node: alpha(v)} on the original network, with its Louvain partition."""
         partition = community_louvain.best_partition(self.G, weight='weight', random_state=self.seed)
         comm_ids = {c: k for k, c in enumerate(sorted(set(partition.values())))}
         comm = np.array([comm_ids[partition[n]] for n in self.nodes])
         n, C = self.n_nodes, len(comm_ids)
-
-        # Dense node x community matrix, O(n*C) memory; switch K to
-        # sparse if networks reach ~1e5 nodes with hundreds of communities
         member = sparse.csr_matrix((np.ones(n), (np.arange(n), comm)), shape=(n, C))
+        # dense node x community matrix, O(n*C) memory
         K = np.asarray((self.adj @ member).todense())
         k = K.sum(axis=1)
         tot = np.bincount(comm, weights=k, minlength=C)
-        own = K[np.arange(n), comm]
-        S_in = own.sum() / 2
-        m = k.sum() / 2
-        alive = np.ones(n, dtype=bool)
+        S_in = K[np.arange(n), comm].sum() / 2
+        vit = self.vitality(K, k, tot, comm, S_in, k.sum() / 2)
+        self.vitalities = dict(zip(self.nodes, vit))
+        print(f"Louvain (seed {self.seed}): {C} communities")
+        return self.vitalities
 
-        target_size = max(1, int(n * percentage))
-        print(f"Extracting backbone with target size {target_size} nodes...")
-        pbar = tqdm(total=n - target_size)
-        while alive.sum() > target_size and m > 0:
-            own = K[np.arange(n), comm]
-            vit = self.vitality(K, k, tot, comm, S_in, m)
-            vit[~alive] = np.inf
-            r = int(np.argmin(np.abs(vit)))
-
-            # remove node r and its edges
-            c = comm[r]
-            tot -= K[r]
-            tot[c] -= k[r]
-            S_in -= own[r]
-            m -= k[r]
-            row = self.adj.getrow(r)
-            K[row.indices, c] -= row.data
-            k[row.indices] -= row.data
-            K[r] = 0
-            k[r] = 0
-            alive[r] = False
-            pbar.update(1)
-        pbar.close()
-
-        return self.G.subgraph([self.nodes[i] for i in np.flatnonzero(alive)]).copy()
+    def extract_backbone(self, percentage=0.3, keep_lcc=False):
+        vitalities = self.node_vitalities()
+        vit = np.abs(np.array([vitalities[v] for v in self.nodes]))
+        keep = math.ceil(percentage * self.n_nodes)
+        order = np.argsort(-vit, kind='stable')   # equal |alpha|: the earlier node name first
+        backbone = self.G.subgraph([self.nodes[i] for i in order[:keep]]).copy()
+        print(f"Keeping {keep} of {self.n_nodes} nodes with the largest |vitality|")
+        if keep_lcc and backbone.number_of_nodes():
+            backbone = backbone.subgraph(max(nx.connected_components(backbone), key=len)).copy()
+            print(f"Largest connected component: {backbone.number_of_nodes()} nodes")
+        return backbone
 
 def load_graph_sparse(file_path, max_lines=None):
     """
@@ -139,22 +129,21 @@ def save_backbone_sparse(backbone, output_file):
 class ModularityFilter:
     """Wrapper class for Flask server."""
 
-    def __init__(self, percentage=0.3, test_mode=False, max_lines=None, seed=42):
-        self.seed = seed
+    def __init__(self, percentage=0.3, seed=42, keep_lcc=False, max_lines=None):
         self.percentage = percentage
-        self.test_mode = test_mode
+        self.seed = seed
+        self.keep_lcc = keep_lcc
         self.max_lines = max_lines
 
     def run(self, input_file, output_file):
         try:
-            print(f"\n=== Modularity Filter ===")
-            print(f"Input: {input_file}, Percentage: {self.percentage}")
+            print("\n=== Modularity Filter ===")
+            print(f"Input: {input_file}, percentage={self.percentage}, seed={self.seed}, keep_lcc={self.keep_lcc}")
 
-            max_lines = self.max_lines if not self.test_mode else 10000
-            G = load_graph_sparse(input_file, max_lines)
+            G = load_graph_sparse(input_file, self.max_lines)
             print(f"Graph: {len(G.nodes())} nodes, {len(G.edges())} edges")
 
-            backbone = SparseModularityBackbone(G, seed=self.seed).extract_backbone(self.percentage)
+            backbone = SparseModularityBackbone(G, seed=self.seed).extract_backbone(self.percentage, self.keep_lcc)
             print(f"Backbone: {len(backbone.nodes())} nodes, {len(backbone.edges())} edges")
 
             save_backbone_sparse(backbone, output_file)
@@ -174,17 +163,14 @@ class ModularityFilter:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Modularity Vitality Backbone Extraction')
+    parser = argparse.ArgumentParser(description='Modularity vitality backbone (Rajeh et al. 2022)')
     parser.add_argument('input', help='Input edge list file')
     parser.add_argument('output', help='Output backbone file')
-    parser.add_argument('--percentage', type=float, default=0.3)
+    parser.add_argument('--percentage', type=float, default=0.3, help='Fraction of nodes kept (default 0.3)')
+    parser.add_argument('--seed', type=int, default=42, help='Louvain seed (default 42)')
+    parser.add_argument('--keep_lcc', action='store_true', help='Keep only the largest connected component')
     parser.add_argument('--max_lines', type=int)
     args = parser.parse_args()
 
-    G = load_graph_sparse(args.input, args.max_lines)
-    print(f"Graph: {len(G.nodes())} nodes, {len(G.edges())} edges")
-
-    backbone = SparseModularityBackbone(G).extract_backbone(args.percentage)
-    print(f"Backbone: {len(backbone.nodes())} nodes, {len(backbone.edges())} edges")
-
-    save_backbone_sparse(backbone, args.output)
+    stats = ModularityFilter(args.percentage, args.seed, args.keep_lcc, args.max_lines).run(args.input, args.output)
+    print(stats)
