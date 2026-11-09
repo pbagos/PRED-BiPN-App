@@ -146,17 +146,7 @@ def _execute_processing(data, task_id):
             elif method.lower() == "doubly stochastic filter":
                 output_path = os.path.join(app.config["UPLOAD_FOLDER"], f'result_{safe_method}_{ts}.tsv')
                 directed = str(data.get('directed', 'false')).lower() == 'true'
-                ds_mode = str(data.get('ds_mode', 'slater')).lower()
-                app.logger.info(f"Parameters: rule={ds_mode}, directed={directed}"
-                                + (f", alpha={alpha}" if ds_mode == 'strict' else ''))
-                extractor = TrueMultiscaleBackbone(significance_level=alpha, directed=directed)
-                extractor.extract_backbone(
-                    edge_list_path=input_path,
-                    output_path=output_path,
-                    mode=ds_mode,
-                    nrows=None,
-                    logger=app.logger
-                )
+                TrueMultiscaleBackbone(directed=directed).extract_backbone(input_path, output_path, logger=app.logger)
                 result_files = {'result_file': os.path.basename(output_path)}
 
             elif method.lower() == "hierarchical backbone":

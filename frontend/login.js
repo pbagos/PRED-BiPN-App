@@ -42,11 +42,7 @@ const HEADER = { key: 'has_header', label: 'First row is a header', type: 'selec
 
 const PARAMS = {
   'Disparity Filter': [ALPHA],
-  'Doubly Stochastic Filter': [
-    { key: 'ds_mode', label: 'Stopping rule', hint: 'Slater: add edges until connected', type: 'select', value: 'slater',
-      options: [['slater', 'Slater (2009)'], ['strict', 'Strict (PRED-BiPN heuristic)']] },
-    DIRECTED,
-    { ...ALPHA, hint: 'Strict rule only', when: v => v.ds_mode === 'strict' }],
+  'Doubly Stochastic Filter': [DIRECTED],
   'Locally Adaptive Network Sparsification Filter': [ALPHA],
   'Marginal Likelihood Filter': [ALPHA],
   'Noise Corrected Filter': [

@@ -1,21 +1,32 @@
+"""Doubly stochastic backbone, Slater (2009).
+
+1. The weight matrix W (symmetric for an undirected network) is scaled to a
+   doubly stochastic matrix with the Sinkhorn-Knopp algorithm. As in the
+   reference code (Coscia's backboning.py, netbone), epsilon = 1e-4 is added to
+   every cell first: a sparse W usually has no doubly stochastic scaling (it
+   lacks total support, Sinkhorn & Knopp 1967), a positive matrix always has
+   one. Iteration stops when std(row sums) < 1e-12, as in the reference code.
+2. Edges are added in decreasing order of their scaled value until the
+   backbone is connected (strongly connected for a directed network). For an
+   input that is not connected this condition is applied to each of its
+   components: stop when the backbone has the same connected (strongly
+   connected) components as the input.
+
+There are no further parameters; epsilon and the tolerance are fixed to the
+reference values.
+"""
 import numpy as np
 import pandas as pd
 import networkx as nx
 from scipy.sparse import coo_matrix, csr_matrix, triu
-from collections import defaultdict
-from tqdm import tqdm
+
+EPSILON = 1e-4
+TOL = 1e-12
+MAX_ITER = 1000
+
 
 class TrueMultiscaleBackbone:
-    def __init__(self, max_iter=1000, tol=1e-12, epsilon=1e-4,
-                 significance_level=0.05, sparsity_adjustment=True,
-                 early_stop_percentile=5, min_edges=None, directed=False):
-        self.max_iter = max_iter
-        self.tol = tol
-        self.epsilon = epsilon
-        self.significance_level = significance_level
-        self.sparsity_adjustment = sparsity_adjustment
-        self.early_stop_percentile = early_stop_percentile
-        self.min_edges = min_edges
+    def __init__(self, directed=False):
         self.directed = directed
 
     def _detect_separator(self, file_path):
@@ -26,183 +37,80 @@ class TrueMultiscaleBackbone:
         sep = max(separators, key=lambda k: separators[k])
         return sep if separators[sep] > 0 else '\t'
 
-    def _make_doubly_stochastic(self, matrix):
-        """Sinkhorn-Knopp on W + epsilon (every cell, as in the reference code of
-        Coscia and netbone): a sparse W usually has no doubly stochastic scaling
-        (no total support), a positive matrix always has one. The dense matrix is
-        never built: the scaled matrix is diag(r) (W + eps) diag(c), so
+    @staticmethod
+    def _make_doubly_stochastic(matrix, return_iterations=False):
+        """Sinkhorn-Knopp on W + EPSILON (every cell). The dense matrix is never
+        built: the scaled matrix is diag(r) (W + eps) diag(c), so
         row sums = r * (W c + eps * sum(c)) and column sums likewise.
-        Stops when std(row sums) < tol, as the reference does.
         Returns the scaled values on the nonzero cells of W."""
         W = matrix.tocsr()
-        eps = self.epsilon
         r = np.ones(W.shape[0]); c = np.ones(W.shape[1])
-        for it in range(1, self.max_iter + 1):
-            r = 1 / (W @ c + eps * c.sum())
-            c = 1 / (W.T @ r + eps * r.sum())
-            if np.std(r * (W @ c + eps * c.sum())) < self.tol:
+        for it in range(1, MAX_ITER + 1):
+            r = 1 / (W @ c + EPSILON * c.sum())
+            c = 1 / (W.T @ r + EPSILON * r.sum())
+            if np.std(r * (W @ c + EPSILON * c.sum())) < TOL:
                 break
         else:
-            print(f"Warning: Sinkhorn did not converge in {self.max_iter} iterations")
-        print(f"Sinkhorn converged in {it} iterations (epsilon={eps})")
+            it = None   # did not converge
         coo = W.tocoo()
-        return csr_matrix((r[coo.row] * (coo.data + eps) * c[coo.col], (coo.row, coo.col)), shape=W.shape)
+        scaled = csr_matrix((r[coo.row] * (coo.data + EPSILON) * c[coo.col], (coo.row, coo.col)), shape=W.shape)
+        return (scaled, it) if return_iterations else scaled
 
-    def _tarjan_strongly_connected(self, adj_list):
-        index = 0
-        indices = {}
-        lowlinks = {}
-        on_stack = set()
-        stack = []
-        components = []
-
-        def strongconnect(node):
-            nonlocal index
-            indices[node] = index
-            lowlinks[node] = index
-            index += 1
-            stack.append(node)
-            on_stack.add(node)
-
-            for neighbor in adj_list.get(node, []):
-                if neighbor not in indices:
-                    strongconnect(neighbor)
-                    lowlinks[node] = min(lowlinks[node], lowlinks[neighbor])
-                elif neighbor in on_stack:
-                    lowlinks[node] = min(lowlinks[node], indices[neighbor])
-
-            if lowlinks[node] == indices[node]:
-                component = []
-                while True:
-                    w = stack.pop()
-                    on_stack.remove(w)
-                    component.append(w)
-                    if w == node:
-                        break
-                components.append(component)
-
-        for node in adj_list:
-            if node not in indices:
-                strongconnect(node)
-
-        return components
-
-    def _build_backbone_slater(self, edges, node_names, target_components):
-        """Slater (2009), adapted to a disconnected input: add edges in decreasing
-        order until the backbone has as many connected components as the input
-        (weak components for a directed network)."""
-        parent = list(range(len(node_names)))
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
+    def _n_components(self, n, edges):
         G = nx.DiGraph() if self.directed else nx.Graph()
-        G.add_nodes_from(node_names)
-        components = len(node_names)
-        for i, j, w in edges:
-            G.add_edge(node_names[i], node_names[j], weight=w)
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[ri] = rj
-                components -= 1
-                if components == target_components:
-                    print(f"Stopping: backbone has {components} components, as the input")
-                    break
-        return G
+        G.add_nodes_from(range(n))
+        G.add_edges_from((i, j) for i, j, _ in edges)
+        return nx.number_strongly_connected_components(G) if self.directed else nx.number_connected_components(G)
 
-    def _build_backbone(self, matrix, node_names, target_components=None):
-        """Edges are taken in decreasing order of the doubly stochastic value.
+    def _slater_prefix(self, edges, n, target):
+        """Number of edges, taken in the given (decreasing) order, after which the
+        backbone first has `target` (strongly) connected components. Adding an
+        edge never splits a component, so the count only falls as edges are added."""
+        if not self.directed:   # union-find, one pass
+            parent = list(range(n))
 
-        mode 'slater': only Slater's rule (see _build_backbone_slater).
-        Other modes apply, per edge, in this order:
-          1. an edge below significance_level is skipped (the edges are sorted,
-             so no later edge is kept either);
-          2. the edge is added;
-          3. stop if its value is below the early_stop_percentile-th
-             percentile of all values (not applied before min_edges edges);
-          4. every 1,000 edges, stop if the nodes reached so far form a single
-             (strongly) connected component.
-        """
-        coo = matrix.tocoo()
-        edges = sorted(zip(coo.row, coo.col, coo.data), key=lambda x: -x[2])
-        if target_components is not None:
-            return self._build_backbone_slater(edges, node_names, target_components)
+            def find(x):
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+            comps = n
+            for k, (i, j, _) in enumerate(edges, 1):
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+                    comps -= 1
+                    if comps == target:
+                        return k
+            return len(edges)
+        lo, hi = 0, len(edges)   # strongly connected: binary search on the prefix length
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._n_components(n, edges[:mid]) == target:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
 
-        weights = [w for _, _, w in edges]
-        percentile_threshold = np.percentile(weights, self.early_stop_percentile)
-        significance_threshold = self.significance_level if self.significance_level else 0
-
-        G = nx.DiGraph() if self.directed else nx.Graph()
-        G.add_nodes_from(node_names)
-        adj_list = defaultdict(list)
-        backbone_edges = []
-
-        for i, j, w in tqdm(edges, desc="Building backbone"):
-            if w < significance_threshold:
-                continue
-
-            G.add_edge(node_names[i], node_names[j], weight=w)
-            adj_list[i].append(j)
-            if not self.directed:
-                adj_list[j].append(i)
-            backbone_edges.append((i, j, w))
-
-            if self.min_edges and len(backbone_edges) < self.min_edges:
-                continue
-
-            if w < percentile_threshold:
-                print(f"Stopping: edge weight {w:.4f} < {percentile_threshold:.4f} percentile")
-                break
-
-            if len(backbone_edges) % 1000 == 0:
-                components = self._tarjan_strongly_connected(adj_list)
-                if len(components) == 1:
-                    print("Stopping: achieved strong connectivity")
-                    break
-
-        return G
-
-    def extract_backbone(self, edge_list_path, output_path, mode='slater',
-                         nrows=None, logger=None):
-        # mode 'slater' (default): Slater (2009) only. mode 'strict': a PRED-BiPN
-        # heuristic, the significance_level given to __init__ (the interface's
-        # alpha) plus a 20th-percentile stop; see _build_backbone for the order.
-        if mode not in ('slater', 'strict'):
-            raise ValueError(f"mode must be 'slater' or 'strict', not {mode!r}")
-        if mode == 'strict':
-            self.early_stop_percentile = 20
-            self.min_edges = None
-        print(f"Parameters: mode={mode}, directed={self.directed}"
-              + (f", alpha={self.significance_level}" if mode == 'strict' else ''))
-
+    def extract_backbone(self, edge_list_path, output_path, logger=None):
+        say = logger.info if logger else print           # the app passes its logger, so these
+        warn = logger.warning if logger else print       # lines reach the run's log
+        say(f"Parameters: directed={self.directed}, epsilon={EPSILON}, tolerance={TOL}")
         print("Loading network...")
         try:
             sep = self._detect_separator(edge_list_path)
-
-            df = pd.read_csv(edge_list_path, sep=sep, header=0, nrows=nrows)
+            df = pd.read_csv(edge_list_path, sep=sep, header=0)
             print(f"  Columns detected: {list(df.columns)}")
-
-            if df.empty:
-                print(f"  Warning: The file is empty.")
+            if df.empty or df.shape[1] < 3:
+                print("  Warning: the file is empty or has no weight column.")
                 return nx.DiGraph()
-
-            df = df.rename(columns={
-                df.columns[0]: 'source',
-                df.columns[1]: 'target',
-                df.columns[2]: 'weight'
-            })
-
+            df = df.rename(columns={df.columns[0]: 'source', df.columns[1]: 'target', df.columns[2]: 'weight'})
             df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
             df = df.dropna(subset=['weight'])
-            df = df[df['source'] != df['target']]
-
+            df = df[(df['source'] != df['target']) & (df['weight'] > 0)]
             if df.empty:
                 print("  Warning: No valid edges found.")
                 return nx.DiGraph()
-
         except FileNotFoundError:
             print(f"Error: File not found: '{edge_list_path}'")
             return nx.DiGraph()
@@ -211,70 +119,56 @@ class TrueMultiscaleBackbone:
             return nx.DiGraph()
 
         nodes = sorted(set(df['source']) | set(df['target']))
-        node_to_idx = {n: i for i, n in enumerate(nodes)}
-
-        if not nodes:
-            print("  Warning: No nodes found.")
-            return nx.DiGraph()
-
-        sparse_matrix = coo_matrix(
-            (df['weight'],
-             ([node_to_idx[s] for s in df['source']],
-              [node_to_idx[t] for t in df['target']])),
-            shape=(len(nodes), len(nodes))
-        ).tocsr()
-
-        print(f"Network: {len(nodes)} nodes, {sparse_matrix.nnz} edges")
-
-        if sparse_matrix.nnz == 0:
-            print("Warning: The sparse matrix is empty.")
-            return nx.DiGraph()
-
+        idx = {v: i for i, v in enumerate(nodes)}
+        W = coo_matrix((df['weight'], ([idx[s] for s in df['source']], [idx[t] for t in df['target']])),
+                       shape=(len(nodes), len(nodes))).tocsr()
+        print(f"Network: {len(nodes)} nodes, {W.nnz} edges")
         if not self.directed:
-            # undirected: A-B and B-A are the same edge, so normalise the
-            # symmetric matrix and keep each pair once (upper triangle)
-            sparse_matrix = (sparse_matrix + sparse_matrix.T).tocsr()
+            # undirected: A-B and B-A are the same edge, so scale the symmetric
+            # matrix and keep each pair once (upper triangle)
+            W = (W + W.T).tocsr()
 
-        print("Normalizing matrix...")
-        normalized = self._make_doubly_stochastic(sparse_matrix)
+        scaled, iterations = self._make_doubly_stochastic(W, return_iterations=True)
+        if iterations is None:
+            warn(f"Sinkhorn did not converge in {MAX_ITER} iterations")
+        else:
+            say(f"Sinkhorn converged in {iterations} iterations (epsilon={EPSILON})")
         if not self.directed:
-            normalized = triu(normalized.maximum(normalized.T), k=1).tocsr()
+            scaled = triu(scaled.maximum(scaled.T), k=1).tocsr()
+        coo = scaled.tocoo()
+        # decreasing value; equal values by node order, so the result does not depend on row order
+        edges = sorted(zip(coo.row, coo.col, coo.data), key=lambda e: (-e[2], e[0], e[1]))
 
-        target = None
-        if mode == 'slater':
-            inp = nx.DiGraph() if self.directed else nx.Graph()
-            inp.add_nodes_from(nodes)
-            inp.add_edges_from(zip(df['source'], df['target']))
-            target = nx.number_weakly_connected_components(inp) if self.directed \
-                else nx.number_connected_components(inp)
-            print(f"Input network: {target} connected components")
+        all_edges = [(i, j, 0) for i, j, _ in edges]
+        target = self._n_components(len(nodes), all_edges)
+        kind = 'strongly connected' if self.directed else 'connected'
+        say(f"Input network: {target} {kind} components")
+        if self.directed and target == len(nodes):
+            warn("The directed input has no cycles, so every node is its own strongly connected "
+                  "component and Slater's rule keeps no edge. An edge list that lists each pair once "
+                  "(such as a projection) should be run as Undirected.")
+        k = self._slater_prefix(edges, len(nodes), target)
+        say(f"Stopping after {k} of {len(edges)} edges: the backbone has the same {target} {kind} components as the input")
 
-        print("Extracting backbone...")
-        backbone = self._build_backbone(normalized, nodes, target)
+        # weight = the input weight of the pair (for undirected input, w(A,B) + w(B,A)
+        # if the file lists both directions, as in the scaled matrix)
+        Wd = W.todok()
+        rows = [(nodes[i], nodes[j], Wd[i, j], val) for i, j, val in edges[:k]]
+        out = pd.DataFrame(rows, columns=['source', 'target', 'weight', 'ds_value'])
+        out.to_csv(output_path, index=False, sep='\t')
+        say(f"Results: {out[['source', 'target']].stack().nunique()} nodes, {len(out)} edges")
 
-        print(f"\nResults:")
-        print(f"  Nodes: {backbone.number_of_nodes()}")
-        print(f"  Edges: {backbone.number_of_edges()}")
-        print(f"  Connected: {nx.is_strongly_connected(backbone) if self.directed else nx.is_connected(backbone)}")
-
-        rows = []
-        for u, v, data in backbone.edges(data=True):
-            rows.append({'source': u, 'target': v, 'weight': data.get('weight', 1.0)})
-
-        pd.DataFrame(rows, columns=['source', 'target', 'weight']).to_csv(
-            output_path, index=False, sep='\t')
-        print(f"  Saved to {output_path}")
-
+        backbone = nx.DiGraph() if self.directed else nx.Graph()
+        backbone.add_nodes_from(nodes)
+        backbone.add_weighted_edges_from(out[['source', 'target', 'weight']].itertuples(index=False))
         return backbone
+
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Doubly stochastic backbone (Slater 2009)')
     parser.add_argument('input', help='Weighted edge list with a header row')
-    parser.add_argument('output', help='Output TSV')
-    parser.add_argument('--mode', choices=['slater', 'strict'], default='slater', help='Stopping rule (default slater)')
-    parser.add_argument('--alpha', type=float, default=0.05, help='Significance level, strict rule only (default 0.05)')
+    parser.add_argument('output', help='Output TSV: source, target, weight, ds_value')
     parser.add_argument('--directed', action='store_true', help='Treat the network as directed')
     args = parser.parse_args()
-    TrueMultiscaleBackbone(significance_level=args.alpha, directed=args.directed).extract_backbone(
-        args.input, args.output, mode=args.mode)
+    TrueMultiscaleBackbone(directed=args.directed).extract_backbone(args.input, args.output)

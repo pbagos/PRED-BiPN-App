@@ -247,10 +247,9 @@ class NoiseCorrectedBackbone:
 
 def main():
     parser = argparse.ArgumentParser(description='Noise-corrected backbone extraction for networks')
-    parser.add_argument('--strict', action='store_true', help='Use strict filtering')
-    parser.add_argument('--delta', type=float, default=3.09, help='Delta threshold (z)')
-    parser.add_argument('--zthresh', type=float, default=4.0, help='Z-score threshold for strict filtering')
-    parser.add_argument('--percentile', type=float, default=95, help='Node degree percentile for strict filtering')
+    parser.add_argument('--delta', type=float, default=3.09, help='Keep an edge if score - delta * sd > 0 (default 3.09)')
+    parser.add_argument('--visualize', action='store_true',
+                        help='Also write backbone_network.gexf and network_preview.png to the current folder')
     parser.add_argument('--output', type=str, default='filtered_edges.tsv', help='Output TSV filename')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of input rows processed')
     parser.add_argument('--input', type=str, required=True, help='Input file')
@@ -291,29 +290,15 @@ def main():
         header=header,
         encoding=args.encoding
     ):
-        if args.strict:
-            print("\nApplying STRICT backbone filtering")
-            backbone = None
-            params = {}
-        else:
-            nc_df = backbone_extractor.noise_corrected_backbone()
-            backbone = nc_df[nc_df['significant']].copy()
-            params = {
-                'filter_type': 'standard',
-                'delta': args.delta,
-                'row_limit': args.limit,
-                'source_col': args.source_col,
-                'target_col': args.target_col,
-                'weight_col': args.weight_col
-            }
+        nc_df = backbone_extractor.noise_corrected_backbone()
+        backbone = nc_df[nc_df['significant']].copy()
+        backbone_extractor.save_filtered_edges(backbone, {'delta': args.delta})
 
-        backbone_extractor.save_filtered_edges(backbone, params)
-
-        if backbone is not None and len(backbone) > 0:
+        if len(backbone) == 0:
+            print("No edges passed the backbone filter")
+        elif args.visualize:
             print("\nStarting visualization...")
             backbone_extractor.visualize_network_safely(backbone)
-        else:
-            print("No edges passed the backbone filter")
     else:
         print("Failed to load data. Exiting.")
 
